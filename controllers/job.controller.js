@@ -17,6 +17,10 @@ const formatJobRow = (r) => ({
   description: r.description || '',
   durationHours: parseFloat(r.duration_hours || 1.5),
   assignedStaffId: r.assigned_staff_id || null,
+  assignedStaffIds: r.assigned_staff_ids ? (typeof r.assigned_staff_ids === 'string' ? JSON.parse(r.assigned_staff_ids) : r.assigned_staff_ids) : [],
+  priority: r.priority || 'NORMAL',
+  latitude: r.latitude || null,
+  longitude: r.longitude || null,
   assignedStaffCode: r.staff_code || (r.assigned_staff_id ? `STF-${100 + r.assigned_staff_id}` : null),
   assignedStaffName: r.staff_name || null,
   assignedStaffColor: r.staff_color || '#009bf2',
@@ -154,6 +158,8 @@ const createJob = async (req, res, next) => {
       section, pipeline_stage,
       scheduled_date, scheduledDate,
       scheduled_time_slot, scheduledTimeSlot,
+      priority,
+      assigned_staff_ids, assignedStaffIds,
     } = req.body;
 
     let resId = resident_id || tenantId || null;
@@ -198,6 +204,13 @@ const createJob = async (req, res, next) => {
     const quoteVal = quote_amount || quoteAmount ? parseFloat(quote_amount || quoteAmount) : null;
     const schedDate = scheduled_date || scheduledDate || null;
     const schedSlot = scheduled_time_slot || scheduledTimeSlot || null;
+    const jobPriority = priority || 'NORMAL';
+    const staffIdsArr = assigned_staff_ids || assignedStaffIds || [];
+    const staffIdsJson = staffIdsArr.length > 0 ? JSON.stringify(staffIdsArr) : null;
+
+    // Generate mock coordinates near London for demo
+    const mockLat = 51.5074 + (Math.random() - 0.5) * 0.1;
+    const mockLng = -0.1278 + (Math.random() - 0.5) * 0.1;
 
     // Contact & Title Validation Enforcement
     if (!jobTitle) {
@@ -262,13 +275,15 @@ const createJob = async (req, res, next) => {
       `INSERT INTO work_orders (
         job_number, title, resident_id, resident_name, contact_phone, contact_email,
         property_address, description, duration_hours, pipeline_stage,
-        assigned_staff_id, manager_name, quote_amount, scheduled_date,
+        assigned_staff_id, assigned_staff_ids, priority, latitude, longitude,
+        manager_name, quote_amount, scheduled_date,
         scheduled_time_slot, secure_token, created_by
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         jobNumber, jobTitle, resId, resName, resPhone, resEmail,
         resAddress, jobDesc, hours, stage,
-        rawStaffId, mgrName, quoteVal, schedDate,
+        rawStaffId, staffIdsJson, jobPriority, mockLat, mockLng,
+        mgrName, quoteVal, schedDate,
         schedSlot, secureToken, req.user.id
       ]
     );

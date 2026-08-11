@@ -28,6 +28,9 @@ const getStaff = async (req, res, next) => {
         sp.break_start_time,
         sp.break_end_time,
         sp.unavailable_dates_json,
+        sp.kpi_score,
+        sp.jobs_completed,
+        sp.revisits,
         sp.created_at,
         sp.updated_at
       FROM users u
@@ -43,7 +46,7 @@ const getStaff = async (req, res, next) => {
       queryParams.push(term, term, term, term);
     }
 
-    sql += ' ORDER BY u.created_at DESC';
+    sql += ' ORDER BY sp.kpi_score DESC, u.created_at DESC';
 
     const [rows] = await pool.query(sql, queryParams);
 
@@ -68,6 +71,9 @@ const getStaff = async (req, res, next) => {
         end: r.break_end_time ? String(r.break_end_time).substring(0, 5) : '13:00',
       },
       unavailable: r.unavailable_dates_json || [],
+      kpiScore: r.kpi_score || 0,
+      jobsCompleted: r.jobs_completed || 0,
+      revisits: r.revisits || 0,
     }));
 
     res.status(200).json({
@@ -93,7 +99,8 @@ const getStaffById = async (req, res, next) => {
         u.id as user_id, u.email, u.avatar_url, u.full_name as name, u.phone, u.role, u.is_active,
         sp.id as profile_id, sp.staff_code, sp.role_title, sp.color_hex,
         sp.working_days_json, sp.work_start_time, sp.work_end_time,
-        sp.break_start_time, sp.break_end_time, sp.unavailable_dates_json
+        sp.break_start_time, sp.break_end_time, sp.unavailable_dates_json,
+        sp.kpi_score, sp.jobs_completed, sp.revisits
       FROM users u
       LEFT JOIN staff_profiles sp ON u.id = sp.user_id
       WHERE sp.id = ? OR u.id = ?`,
@@ -129,6 +136,9 @@ const getStaffById = async (req, res, next) => {
         end: r.break_end_time ? String(r.break_end_time).substring(0, 5) : '13:00',
       },
       unavailable: r.unavailable_dates_json || [],
+      kpiScore: r.kpi_score || 0,
+      jobsCompleted: r.jobs_completed || 0,
+      revisits: r.revisits || 0,
     };
 
     res.status(200).json({

@@ -326,7 +326,7 @@ const markJobComplete = async (req, res, next) => {
     const { id } = req.params;
     const staffProfileId = await getStaffProfileId(req.user.id);
 
-    const [jobRows] = await pool.query('SELECT id, assigned_staff_id, pipeline_stage FROM work_orders WHERE id = ?', [id]);
+    const [jobRows] = await pool.query('SELECT id, assigned_staff_id, assigned_staff_ids, pipeline_stage, duration_hours FROM work_orders WHERE id = ?', [id]);
     if (jobRows.length === 0) {
       return res.status(404).json({
         success: false,
@@ -382,9 +382,32 @@ const markJobComplete = async (req, res, next) => {
       [id]
     );
 
-    const [woRows] = await pool.query("SELECT title, assigned_staff_id FROM work_orders WHERE id = ?", [id]);
+    const [woRows] = await pool.query("SELECT title, assigned_staff_id, assigned_staff_ids, duration_hours FROM work_orders WHERE id = ?", [id]);
     const jobTitle = woRows[0]?.title || 'Repair Job';
     const assignedStaffId = woRows[0]?.assigned_staff_id;
+    const durationHours = parseFloat(woRows[0]?.duration_hours || 1.5);
+
+    // ==========================================
+    // KPI POINTS CALCULATION
+    // ==========================================
+    const pointsEarned = Math.floor(durationHours * 10);
+    
+    let staffIdsToReward = [];
+    if (woRows[0]?.assigned_staff_ids) {
+      staffIdsToReward = typeof woRows[0].assigned_staff_ids === 'string' 
+        ? JSON.parse(woRows[0].assigned_staff_ids) 
+        : woRows[0].assigned_staff_ids;
+    } else if (assignedStaffId) {
+      staffIdsToReward = [assignedStaffId];
+    }
+
+    for (const sId of staffIdsToReward) {
+      await pool.query(
+        "UPDATE staff_profiles SET jobs_completed = jobs_completed + 1, kpi_score = kpi_score + ? WHERE id = ?",
+        [pointsEarned, sId]
+      );
+    }
+    // ==========================================
 
     let techName = 'Technician';
     if (assignedStaffId) {
