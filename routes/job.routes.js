@@ -14,7 +14,7 @@ const { authenticateToken, authorizeRoles } = require('../middleware/auth.middle
 // All work order routes require JWT authentication
 router.use(authenticateToken);
 
-const { getJobCompletionEvidence } = require('../controllers/staffCompletion.controller');
+const { getJobCompletionEvidence, completeJobAtomic } = require('../controllers/staffCompletion.controller');
 const upload = require('../middleware/upload.middleware');
 
 // Read Endpoints (Office Admin, Office Team & Maintenance Staff)
@@ -33,6 +33,14 @@ router.put('/:id/status', updateJobStatus);
 
 // Cancel/Reschedule Endpoint (Maintenance Staff Only)
 router.post('/:id/cancel', authorizeRoles('MAINTENANCE_STAFF'), upload.single('proof'), cancelJob);
+
+// Atomic Completion Endpoint (Maintenance Staff Only)
+router.post(
+  '/:id/complete',
+  authorizeRoles('MAINTENANCE_STAFF'),
+  upload.fields([{ name: 'beforePhotos' }, { name: 'afterPhotos' }, { name: 'receipts' }]),
+  completeJobAtomic
+);
 
 // Delete Endpoint (Office Admin Only)
 router.delete('/:id', authorizeRoles('OFFICE_ADMIN'), deleteJob);

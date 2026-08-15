@@ -534,6 +534,157 @@ const getJobCompletionEvidence = async (req, res, next) => {
   }
 };
 
+const fs = require('fs');
+
+// @desc    Atomic completion for a job (Report, Photos, Materials)
+// @route   POST /api/v1/jobs/:id/complete
+// @access  Private (Maintenance Staff)
+const completeJobAtomic = async (req, res, next) => {
+  const connection = await pool.getConnection();
+  try {
+    const { id } = req.params;
+    const staffProfileId = await getStaffProfileId(req.user.id);
+    const { completion_report, materials } = req.body;
+
+    if (req.user.role !== 'MAINTENANCE_STAFF') {
+      if (req.files) Object.values(req.files).flat().forEach(f => fs.unlink(f.path, () => {}));
+      connection.release();
+      return res.status(403).json({ success: false, message: 'Forbidden. Only Maintenance Staff can complete jobs.' });
+    }
+
+    if (!completion_report || !completion_report.trim()) {
+      if (req.files) Object.values(req.files).flat().forEach(f => fs.unlink(f.path, () => {}));
+      connection.release();
+      return res.status(400).json({ success: false, message: 'Validation Error: Completion report is required.' });
+    }
+
+    // Process Materials
+    let parsedMaterials = [];
+    if (materials) {
+      try {
+        parsedMaterials = JSON.parse(materials);
+        if (!Array.isArray(parsedMaterials)) throw new Error('Materials must be an array');
+        for (const m of parsedMaterials) {
+          if (!m.material_name || m.material_name.trim() === '') throw new Error('Material name is required');
+          if (isNaN(m.quantity) || Number(m.quantity) <= 0) throw new Error('Quantity must be > 0');
+          if (isNaN(m.unit_cost) || Number(m.unit_cost) < 0) throw new Error('Unit cost must be >= 0');
+        }
+      } catch (err) {
+        if (req.files) Object.values(req.files).flat().forEach(f => fs.unlink(f.path, () => {}));
+        connection.release();
+        return res.status(400).json({ success: false, message: `Invalid materials JSON: ${err.message}` });
+      }
+    }
+
+    await connection.beginTransaction();
+
+    const [jobRows] = await connection.query('SELECT id, assigned_staff_id, pipeline_stage, title FROM work_orders WHERE id = ? FOR UPDATE', [id]);
+    if (jobRows.length === 0) {
+      throw { status: 404, message: `Work order not found with ID ${id}` };
+    }
+    const job = jobRows[0];
+
+    if (job.assigned_staff_id !== staffProfileId) {
+      throw { status: 403, message: 'Forbidden. You can only complete your own assigned work order.' };
+    }
+
+    if (job.pipeline_stage === 'Completed Jobs') {
+      throw { status: 400, message: 'Job is already completed.' };
+    }
+
+    // Insert staff_job_completions
+    const [existingReport] = await connection.query('SELECT id FROM staff_job_completions WHERE work_order_id = ?', [id]);
+    let completionId = null;
+    if (existingReport.length > 0) {
+      completionId = existingReport[0].id;
+      await connection.query(
+        "UPDATE staff_job_completions SET work_report_summary = ?, staff_id = ?, completion_status = 'COMPLETED', completed_at = NOW() WHERE id = ?",
+        [completion_report.trim(), staffProfileId, completionId]
+      );
+    } else {
+      const [insertRes] = await connection.query(
+        "INSERT INTO staff_job_completions (work_order_id, staff_id, work_report_summary, completion_status, completed_at) VALUES (?, ?, ?, 'COMPLETED', NOW())",
+        [id, staffProfileId, completion_report.trim()]
+      );
+      completionId = insertRes.insertId;
+    }
+
+    // Process Media Uploads
+    if (req.files) {
+      const categories = ['beforePhotos', 'afterPhotos', 'receipts'];
+      for (const cat of categories) {
+        if (req.files[cat]) {
+          const type = cat === 'beforePhotos' ? 'BEFORE' : cat === 'afterPhotos' ? 'AFTER' : cat === 'receipts' ? 'RECEIPT' : 'OTHER';
+          for (const file of req.files[cat]) {
+            const fileUrl = `/uploads/${file.filename}`;
+            await connection.query(
+              "INSERT INTO staff_completion_media (completion_id, work_order_id, file_name, file_path, file_size_bytes, mime_type, media_type) VALUES (?, ?, ?, ?, ?, ?, ?)",
+              [completionId, id, file.originalname, fileUrl, file.size, file.mimetype, type]
+            );
+          }
+        }
+      }
+    }
+
+    // Insert Materials
+    if (parsedMaterials.length > 0) {
+      for (const m of parsedMaterials) {
+        const qty = Number(m.quantity);
+        const uCost = Number(m.unit_cost);
+        const tCost = qty * uCost;
+        await connection.query(
+          "INSERT INTO job_material_costs (work_order_id, technician_id, material_name, quantity, unit_cost, total_cost) VALUES (?, ?, ?, ?, ?, ?)",
+          [id, staffProfileId, m.material_name, qty, uCost, tCost]
+        );
+      }
+    }
+
+    // Update Work Order
+    await connection.query(
+      "UPDATE work_orders SET pipeline_stage = 'Completed Jobs', scheduled_date = NULL, scheduled_time_slot = NULL WHERE id = ?",
+      [id]
+    );
+
+    // Provide KPI points
+    await connection.query("UPDATE staff_profiles SET jobs_completed = jobs_completed + 1 WHERE id = ?", [staffProfileId]);
+
+    await connection.commit();
+    connection.release();
+
+    // Notifications
+    try {
+      const [admins] = await pool.query("SELECT id FROM users WHERE role IN ('OFFICE_ADMIN', 'OFFICE_TEAM')");
+      for (const admin of admins) {
+        await notificationService.createNotification({
+          recipientUserId: admin.id,
+          type: 'JOB_COMPLETED',
+          title: 'Technician task completed',
+          message: `Task "${job.title}" was marked completed by technician.`,
+          relatedEntityType: 'work_orders',
+          relatedEntityId: id,
+          actionUrl: `/admin/pipeline?stage=Completed Jobs`
+        });
+      }
+    } catch(err) {
+      console.error(err);
+    }
+
+    res.status(200).json({ success: true, message: 'Job completed successfully.' });
+  } catch (err) {
+    if (connection) {
+      await connection.rollback();
+      connection.release();
+    }
+    if (req.files) Object.values(req.files).flat().forEach(f => fs.unlink(f.path, () => {}));
+    
+    if (err.status) {
+      res.status(err.status).json({ success: false, message: err.message });
+    } else {
+      next(err);
+    }
+  }
+};
+
 module.exports = {
   getMyAssignedJobs,
   getMyAssignedJobById,
@@ -541,4 +692,5 @@ module.exports = {
   uploadCompletionPhotos,
   markJobComplete,
   getJobCompletionEvidence,
+  completeJobAtomic,
 };

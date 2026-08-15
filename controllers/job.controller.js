@@ -33,8 +33,33 @@ const formatJobRow = (r, role) => {
     createdAt: r.created_at ? String(r.created_at).substring(0, 10) : null,
   };
 
+  // Financials
+  const quoteAmount = r.quote_amount ? parseFloat(r.quote_amount) : 0;
+  const totalMaterialCost = r.total_material_cost ? parseFloat(r.total_material_cost) : 0;
+  
+  job.quoteAmount = quoteAmount;
+  job.totalMaterialCost = totalMaterialCost;
+  job.revenue = quoteAmount;
+  job.totalJobCost = totalMaterialCost;
+  job.profit = job.revenue - job.totalJobCost;
+  job.profitMargin = job.revenue > 0 ? ((job.profit / job.revenue) * 100).toFixed(2) + '%' : '0%';
+
   if (role === 'OFFICE_TEAM') {
     delete job.quoteAmount;
+    delete job.totalMaterialCost;
+    delete job.revenue;
+    delete job.totalJobCost;
+    delete job.profit;
+    delete job.profitMargin;
+  }
+
+  if (role === 'MAINTENANCE_STAFF') {
+    delete job.quoteAmount;
+    // They CAN see totalMaterialCost (as they entered it), but not revenue/profit
+    delete job.revenue;
+    delete job.totalJobCost;
+    delete job.profit;
+    delete job.profitMargin;
   }
   
   return job;
@@ -50,6 +75,7 @@ const getJobs = async (req, res, next) => {
     let sql = `
       SELECT 
         w.*,
+        (SELECT SUM(total_cost) FROM job_material_costs jmc WHERE jmc.work_order_id = w.id) AS total_material_cost,
         r.full_name as live_resident_name,
         r.phone as live_contact_phone,
         r.email as live_contact_email,
@@ -116,6 +142,7 @@ const getJobById = async (req, res, next) => {
     const [rows] = await pool.query(
       `SELECT 
         w.*,
+        (SELECT SUM(total_cost) FROM job_material_costs jmc WHERE jmc.work_order_id = w.id) AS total_material_cost,
         r.full_name as live_resident_name,
         r.phone as live_contact_phone,
         r.email as live_contact_email,
@@ -299,6 +326,7 @@ const createJob = async (req, res, next) => {
     const [newJobRows] = await pool.query(
       `SELECT 
         w.*,
+        (SELECT SUM(total_cost) FROM job_material_costs jmc WHERE jmc.work_order_id = w.id) AS total_material_cost,
         r.full_name as live_resident_name,
         r.phone as live_contact_phone,
         r.email as live_contact_email,
@@ -415,6 +443,7 @@ const moveJobStage = async (req, res, next) => {
     const [updatedRows] = await pool.query(
       `SELECT 
         w.*,
+        (SELECT SUM(total_cost) FROM job_material_costs jmc WHERE jmc.work_order_id = w.id) AS total_material_cost,
         r.full_name as live_resident_name,
         r.phone as live_contact_phone,
         r.email as live_contact_email,
@@ -601,6 +630,7 @@ const updateJobStatus = async (req, res, next) => {
     const [updatedRows] = await pool.query(
       `SELECT 
         w.*,
+        (SELECT SUM(total_cost) FROM job_material_costs jmc WHERE jmc.work_order_id = w.id) AS total_material_cost,
         r.full_name as live_resident_name,
         r.phone as live_contact_phone,
         r.email as live_contact_email,
