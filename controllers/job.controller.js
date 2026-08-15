@@ -4,33 +4,41 @@ const notificationService = require('../services/notification.service');
 
 
 // Helper to format raw database row to Frontend job object
-const formatJobRow = (r) => ({
-  id: r.id,
-  jobNumber: r.job_number,
-  section: r.pipeline_stage, // Maps to 5 Kanban stages
-  title: r.title,
-  tenantId: r.resident_id || null,
-  tenantName: r.live_resident_name || r.resident_name,
-  contactPhone: r.live_contact_phone || r.contact_phone,
-  contactEmail: r.live_contact_email || r.contact_email || '',
-  address: r.live_property_address || r.property_address,
-  description: r.description || '',
-  durationHours: parseFloat(r.duration_hours || 1.5),
-  assignedStaffId: r.assigned_staff_id || null,
-  assignedStaffIds: r.assigned_staff_ids ? (typeof r.assigned_staff_ids === 'string' ? JSON.parse(r.assigned_staff_ids) : r.assigned_staff_ids) : [],
-  priority: r.priority || 'NORMAL',
-  latitude: r.latitude || null,
-  longitude: r.longitude || null,
-  assignedStaffCode: r.staff_code || (r.assigned_staff_id ? `STF-${100 + r.assigned_staff_id}` : null),
-  assignedStaffName: r.staff_name || null,
-  assignedStaffColor: r.staff_color || '#009bf2',
-  managerName: r.manager_name || null,
-  quoteAmount: r.quote_amount ? parseFloat(r.quote_amount) : null,
-  scheduledDate: r.scheduled_date ? String(r.scheduled_date).substring(0, 10) : null,
-  scheduledTimeSlot: r.scheduled_time_slot || null,
-  secureToken: r.secure_token,
-  createdAt: r.created_at ? String(r.created_at).substring(0, 10) : null,
-});
+const formatJobRow = (r, role) => {
+  const job = {
+    id: r.id,
+    jobNumber: r.job_number,
+    section: r.pipeline_stage, // Maps to 5 Kanban stages
+    title: r.title,
+    tenantId: r.resident_id || null,
+    tenantName: r.live_resident_name || r.resident_name,
+    contactPhone: r.live_contact_phone || r.contact_phone,
+    contactEmail: r.live_contact_email || r.contact_email || '',
+    address: r.live_property_address || r.property_address,
+    description: r.description || '',
+    durationHours: parseFloat(r.duration_hours || 1.5),
+    assignedStaffId: r.assigned_staff_id || null,
+    assignedStaffIds: r.assigned_staff_ids ? (typeof r.assigned_staff_ids === 'string' ? JSON.parse(r.assigned_staff_ids) : r.assigned_staff_ids) : [],
+    priority: r.priority || 'NORMAL',
+    latitude: r.latitude || null,
+    longitude: r.longitude || null,
+    assignedStaffCode: r.staff_code || (r.assigned_staff_id ? `STF-${100 + r.assigned_staff_id}` : null),
+    assignedStaffName: r.staff_name || null,
+    assignedStaffColor: r.staff_color || '#009bf2',
+    managerName: r.manager_name || null,
+    quoteAmount: r.quote_amount ? parseFloat(r.quote_amount) : null,
+    scheduledDate: r.scheduled_date ? String(r.scheduled_date).substring(0, 10) : null,
+    scheduledTimeSlot: r.scheduled_time_slot || null,
+    secureToken: r.secure_token,
+    createdAt: r.created_at ? String(r.created_at).substring(0, 10) : null,
+  };
+
+  if (role === 'OFFICE_TEAM') {
+    delete job.quoteAmount;
+  }
+  
+  return job;
+};
 
 // @desc    Get all work orders / jobs (supports section, search, and staff filters)
 // @route   GET /api/v1/jobs
@@ -86,7 +94,7 @@ const getJobs = async (req, res, next) => {
     sql += ' ORDER BY w.created_at DESC';
 
     const [rows] = await pool.query(sql, queryParams);
-    const jobs = rows.map(formatJobRow);
+    const jobs = rows.map(r => formatJobRow(r, req.user ? req.user.role : null));
 
     res.status(200).json({
       success: true,
@@ -131,7 +139,7 @@ const getJobById = async (req, res, next) => {
 
     res.status(200).json({
       success: true,
-      data: formatJobRow(rows[0]),
+      data: formatJobRow(rows[0], req.user ? req.user.role : null),
     });
   } catch (err) {
     next(err);
@@ -357,7 +365,7 @@ const createJob = async (req, res, next) => {
     res.status(201).json({
       success: true,
       message: 'Work order created successfully.',
-      data: formatJobRow(newJobRows[0]),
+      data: formatJobRow(newJobRows[0], req.user ? req.user.role : null),
     });
   } catch (err) {
     next(err);
@@ -443,7 +451,7 @@ const moveJobStage = async (req, res, next) => {
     res.status(200).json({
       success: true,
       message: `Work order moved to stage '${newStage}'.`,
-      data: formatJobRow(updatedRows[0]),
+      data: formatJobRow(updatedRows[0], req.user ? req.user.role : null),
     });
   } catch (err) {
     next(err);
@@ -611,7 +619,7 @@ const updateJobStatus = async (req, res, next) => {
     res.status(200).json({
       success: true,
       message: 'Work order updated successfully.',
-      data: formatJobRow(updatedRows[0]),
+      data: formatJobRow(updatedRows[0], req.user ? req.user.role : null),
     });
   } catch (err) {
     next(err);

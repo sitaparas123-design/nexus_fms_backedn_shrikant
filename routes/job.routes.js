@@ -15,14 +15,18 @@ router.use(authenticateToken);
 
 const { getJobCompletionEvidence } = require('../controllers/staffCompletion.controller');
 
-// Read Endpoints (Office Admin & Maintenance Staff)
+// Read Endpoints (Office Admin, Office Team & Maintenance Staff)
 router.get('/', getJobs);
 router.get('/:id', getJobById);
-router.get('/:id/completion-evidence', getJobCompletionEvidence);
+router.get('/:id/completion-evidence', authorizeRoles('OFFICE_ADMIN', 'MAINTENANCE_STAFF'), getJobCompletionEvidence);
 
-// Create / Move Stage / Update Endpoints (Office Admin & Maintenance Staff)
-router.post('/', createJob);
-router.put('/:id/stage', moveJobStage);
+// Create Endpoint (Office Admin Only)
+router.post('/', authorizeRoles('OFFICE_ADMIN'), createJob);
+
+// Move Stage (Office Admin & Maintenance Staff Only)
+router.put('/:id/stage', authorizeRoles('OFFICE_ADMIN', 'MAINTENANCE_STAFF'), moveJobStage);
+
+// Update Status/Schedule (Office Admin, Office Team & Maintenance Staff)
 router.put('/:id/status', updateJobStatus);
 
 // Delete Endpoint (Office Admin Only)

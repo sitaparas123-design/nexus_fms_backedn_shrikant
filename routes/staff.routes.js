@@ -29,12 +29,12 @@ router.post('/jobs/:id/photos', photoUpload.array('photos', 5), uploadCompletion
 router.put('/jobs/:id/complete', markJobComplete);
 
 // Read Endpoints (Accessible by Office Admin & Maintenance Staff)
-router.get('/', getStaff);
-router.get('/:id', getStaffById);
+router.get('/', authorizeRoles('OFFICE_ADMIN', 'MAINTENANCE_STAFF'), getStaff);
+router.get('/:id', authorizeRoles('OFFICE_ADMIN', 'MAINTENANCE_STAFF'), getStaffById);
 
 // Write / Management Endpoints
 router.post('/', authorizeRoles('OFFICE_ADMIN'), photoUpload.single('avatar'), createStaff);
-router.put('/:id', photoUpload.single('avatar'), updateStaff);
+router.put('/:id', authorizeRoles('OFFICE_ADMIN', 'MAINTENANCE_STAFF'), photoUpload.single('avatar'), updateStaff);
 router.delete('/:id', authorizeRoles('OFFICE_ADMIN'), deleteStaff);
 
 module.exports = router;

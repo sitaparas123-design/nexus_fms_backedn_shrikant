@@ -4,10 +4,11 @@ const {
   getBookingRequests,
   generateBookingLink
 } = require('../controllers/bookingLink.controller');
-const { authenticateToken } = require('../middleware/auth.middleware');
+const { authenticateToken, authorizeRoles } = require('../middleware/auth.middleware');
 
-// All endpoints here require authentication
+// All endpoints here require authentication and Admin role
 router.use(authenticateToken);
+router.use(authorizeRoles('OFFICE_ADMIN'));
 
 router.get('/', getBookingRequests);
 router.post('/', generateBookingLink);

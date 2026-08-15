@@ -9,28 +9,35 @@ const getStaffProfileId = async (userId) => {
 };
 
 // Helper to format raw database row to Frontend job object
-const formatJobRow = (r) => ({
-  id: r.id,
-  jobNumber: r.job_number,
-  section: r.pipeline_stage,
-  title: r.title,
-  tenantId: r.resident_id || null,
-  tenantName: r.live_resident_name || r.resident_name,
-  contactPhone: r.live_contact_phone || r.contact_phone,
-  contactEmail: r.live_contact_email || r.contact_email || '',
-  address: r.live_property_address || r.property_address,
-  description: r.description || '',
-  durationHours: parseFloat(r.duration_hours || 1.5),
-  assignedStaffId: r.assigned_staff_id || null,
-  assignedStaffCode: r.staff_code || (r.assigned_staff_id ? `STF-${100 + r.assigned_staff_id}` : null),
-  assignedStaffName: r.staff_name || null,
-  assignedStaffColor: r.staff_color || '#009bf2',
-  quoteAmount: r.quote_amount ? parseFloat(r.quote_amount) : null,
-  scheduledDate: r.scheduled_date ? String(r.scheduled_date).substring(0, 10) : null,
-  scheduledTimeSlot: r.scheduled_time_slot || null,
-  secureToken: r.secure_token,
-  createdAt: r.created_at ? String(r.created_at).substring(0, 10) : null,
-});
+const formatJobRow = (r, role) => {
+  const job = {
+    id: r.id,
+    jobNumber: r.job_number,
+    section: r.pipeline_stage,
+    title: r.title,
+    tenantId: r.resident_id || null,
+    tenantName: r.live_resident_name || r.resident_name,
+    contactPhone: r.live_contact_phone || r.contact_phone,
+    contactEmail: r.live_contact_email || r.contact_email || '',
+    address: r.live_property_address || r.property_address,
+    description: r.description || '',
+    durationHours: parseFloat(r.duration_hours || 1.5),
+    assignedStaffId: r.assigned_staff_id || null,
+    assignedStaffCode: r.staff_code || (r.assigned_staff_id ? `STF-${100 + r.assigned_staff_id}` : null),
+    assignedStaffName: r.staff_name || null,
+    assignedStaffColor: r.staff_color || '#009bf2',
+    quoteAmount: r.quote_amount ? parseFloat(r.quote_amount) : null,
+    scheduledDate: r.scheduled_date ? String(r.scheduled_date).substring(0, 10) : null,
+    scheduledTimeSlot: r.scheduled_time_slot || null,
+    secureToken: r.secure_token,
+    createdAt: r.created_at ? String(r.created_at).substring(0, 10) : null,
+  };
+
+  if (role === 'OFFICE_TEAM') {
+    delete job.quoteAmount;
+  }
+  return job;
+};
 
 // @desc    Get calendar grid dispatches & dynamic staff list
 // @route   GET /api/v1/calendar
@@ -133,7 +140,7 @@ const getCalendar = async (req, res, next) => {
     sql += ' ORDER BY w.scheduled_date ASC, w.scheduled_time_slot ASC';
 
     const [jobRows] = await pool.query(sql, queryParams);
-    const calendarJobs = jobRows.map(formatJobRow);
+    const calendarJobs = jobRows.map(r => formatJobRow(r, req.user ? req.user.role : null));
 
     res.status(200).json({
       success: true,
@@ -362,7 +369,7 @@ const dispatchJob = async (req, res, next) => {
     res.status(200).json({
       success: true,
       message: `Work order ID ${targetJobId} dispatched successfully for ${targetDate} (${targetSlot}).`,
-      data: formatJobRow(updatedRows[0]),
+      data: formatJobRow(updatedRows[0], req.user ? req.user.role : null),
     });
   } catch (err) {
     await connection.rollback();
