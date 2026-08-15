@@ -701,7 +701,18 @@ const cancelJob = async (req, res, next) => {
 
     // 2. Validate 48-Hour Rule
     const { validateCancellationWindow } = require('../services/cancellation.service');
-    const schedDate = job.scheduled_date ? String(job.scheduled_date).substring(0, 10) : null;
+    let schedDate = null;
+    if (job.scheduled_date) {
+      if (job.scheduled_date instanceof Date) {
+        const y = job.scheduled_date.getFullYear();
+        const m = String(job.scheduled_date.getMonth() + 1).padStart(2, '0');
+        const d = String(job.scheduled_date.getDate()).padStart(2, '0');
+        schedDate = `${y}-${m}-${d}`;
+      } else {
+        schedDate = String(job.scheduled_date).substring(0, 10);
+      }
+    }
+    
     if (schedDate && job.scheduled_time_slot) {
       try {
         validateCancellationWindow(schedDate, job.scheduled_time_slot);
