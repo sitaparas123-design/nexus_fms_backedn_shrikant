@@ -36,6 +36,8 @@ const notificationRoutes = require('./routes/notification.routes');
 const { staffCompletionRouter } = require('./routes/staffCompletion.routes');
 const dashboardRoutes = require('./routes/dashboard.routes');
 const settingsRoutes = require('./routes/settings.routes');
+const inventoryRoutes = require('./routes/inventory.routes');
+const webhookRoutes = require('./routes/webhook.routes');
 
 // Health Check Endpoint (Phase 1)
 app.get('/api/v1/health', async (req, res) => {
@@ -62,6 +64,8 @@ app.use('/api/v1/booking-links', bookingLinkRoutes);
 app.use('/api/v1/notifications', notificationRoutes);
 app.use('/api/v1/dashboard', dashboardRoutes);
 app.use('/api/v1/settings', settingsRoutes);
+app.use('/api/v1/inventory', inventoryRoutes);
+app.use('/api/v1/webhooks', webhookRoutes);
 
 // Global 404 Route Handler
 app.use((req, res, next) => {
