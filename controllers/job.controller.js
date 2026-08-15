@@ -652,6 +652,153 @@ const deleteJob = async (req, res, next) => {
   }
 };
 
+// @desc    Cancel or reschedule a job by technician
+// @route   POST /api/v1/jobs/:id/cancel
+// @access  Private (Maintenance Staff Only)
+const cancelJob = async (req, res, next) => {
+  const connection = await pool.getConnection();
+  try {
+    const { id } = req.params;
+    const { cancellationType, reason, notes } = req.body;
+
+    if (!cancellationType || !reason) {
+      return res.status(400).json({
+        success: false,
+        message: 'Cancellation type and reason are required.',
+      });
+    }
+
+    // 1. Validate Job & Staff Ownership
+    const [existing] = await connection.query(
+      'SELECT id, assigned_staff_id, scheduled_date, scheduled_time_slot, pipeline_stage, title, resident_name FROM work_orders WHERE id = ?',
+      [id]
+    );
+
+    if (existing.length === 0) {
+      connection.release();
+      return res.status(404).json({ success: false, message: 'Job not found' });
+    }
+
+    const job = existing[0];
+
+    if (job.pipeline_stage === 'Completed Jobs') {
+      connection.release();
+      return res.status(400).json({ success: false, message: 'Cannot cancel an already completed job.' });
+    }
+
+    if (req.user.role === 'MAINTENANCE_STAFF') {
+      const [userStaffProfile] = await connection.query('SELECT id FROM staff_profiles WHERE user_id = ?', [req.user.id]);
+      const currentStaffProfileId = userStaffProfile.length > 0 ? userStaffProfile[0].id : null;
+
+      if (!currentStaffProfileId || job.assigned_staff_id !== currentStaffProfileId) {
+        connection.release();
+        return res.status(403).json({
+          success: false,
+          message: 'Forbidden. Maintenance Staff can only cancel work orders assigned to them.',
+        });
+      }
+    }
+
+    // 2. Validate 48-Hour Rule
+    const { validateCancellationWindow } = require('../services/cancellation.service');
+    const schedDate = job.scheduled_date ? String(job.scheduled_date).substring(0, 10) : null;
+    if (schedDate && job.scheduled_time_slot) {
+      try {
+        validateCancellationWindow(schedDate, job.scheduled_time_slot);
+      } catch (err) {
+        connection.release();
+        return res.status(err.status || 403).json({
+          success: false,
+          message: err.message,
+          code: err.code
+        });
+      }
+    }
+
+    await connection.beginTransaction();
+
+    // 3. Update Work Order
+    const newStage = 'Jobs Waiting Booking'; // Put back in booking queue
+    const priority = cancellationType === 'TECHNICIAN_CANCELLED' ? 'URGENT' : 'NORMAL';
+
+    await connection.query(
+      `UPDATE work_orders SET 
+        cancellation_type = ?, 
+        cancellation_reason = ?, 
+        cancelled_by = ?, 
+        cancelled_at = NOW(),
+        previous_appointment_date = scheduled_date,
+        previous_appointment_time = scheduled_time_slot,
+        scheduled_date = NULL,
+        scheduled_time_slot = NULL,
+        pipeline_stage = ?,
+        priority = IF(? = 'URGENT', 'URGENT', priority)
+       WHERE id = ?`,
+      [cancellationType, reason, req.user.id, newStage, priority, id]
+    );
+
+    // 4. Create Appointment History Record
+    const [historyResult] = await connection.query(
+      `INSERT INTO appointment_history (
+        work_order_id, action_type, previous_date, previous_time,
+        cancellation_type, reason, performed_by, performed_by_role, notes
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        id, 'CANCELLATION', schedDate, job.scheduled_time_slot,
+        cancellationType, reason, req.user.id, req.user.role, notes || null
+      ]
+    );
+
+    // 5. Handle File Upload if Tenant Cancelled
+    if (req.files && req.files.proof) {
+      const file = req.files.proof;
+      // Wait, let's assume multer handles it and puts it in req.file or req.files.
+      // We will create the cancellation_media_uploads record in the media controller or here.
+      // Since it's a multipart form, we might have req.file here if route uses upload.single('proof').
+    }
+    
+    if (req.file) {
+       await connection.query(
+        `INSERT INTO cancellation_media_uploads (
+          work_order_id, appointment_history_id, file_name, file_path, mime_type, file_size_bytes, uploaded_by
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [id, historyResult.insertId, req.file.originalname, req.file.path, req.file.mimetype, req.file.size, req.user.id]
+      );
+    }
+
+    await connection.commit();
+    connection.release();
+
+    // 6. Notify Office Team and Admin
+    const [officeUsers] = await pool.query("SELECT id, role FROM users WHERE role IN ('OFFICE_ADMIN', 'OFFICE_TEAM')");
+    for (const u of officeUsers) {
+      await notificationService.createNotification({
+        recipientUserId: u.id,
+        type: cancellationType === 'TECHNICIAN_CANCELLED' ? 'TECHNICIAN_CANCELLED_JOB' : 'TENANT_CANCELLED_JOB',
+        title: cancellationType === 'TECHNICIAN_CANCELLED' ? 'Urgent: Tech Cancelled Job' : 'Job Cancelled by Tenant',
+        message: `Job #${id} (${job.title}) cancelled. Reason: ${reason}. Rebooking required.`,
+        relatedEntityType: 'work_orders',
+        relatedEntityId: id,
+        actionUrl: `/admin/pipeline` // Or office equivalent
+      });
+    }
+
+    // Optionally notify Tenant (placeholder via existing service)
+    // await notificationService.dispatchTenantSms(...)
+
+    res.status(200).json({
+      success: true,
+      message: 'Job cancelled successfully.',
+    });
+  } catch (err) {
+    if (connection) {
+      await connection.rollback();
+      connection.release();
+    }
+    next(err);
+  }
+};
+
 module.exports = {
   getJobs,
   getJobById,
@@ -659,4 +806,5 @@ module.exports = {
   moveJobStage,
   updateJobStatus,
   deleteJob,
+  cancelJob,
 };

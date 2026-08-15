@@ -7,6 +7,7 @@ const {
   moveJobStage,
   updateJobStatus,
   deleteJob,
+  cancelJob,
 } = require('../controllers/job.controller');
 const { authenticateToken, authorizeRoles } = require('../middleware/auth.middleware');
 
@@ -14,6 +15,7 @@ const { authenticateToken, authorizeRoles } = require('../middleware/auth.middle
 router.use(authenticateToken);
 
 const { getJobCompletionEvidence } = require('../controllers/staffCompletion.controller');
+const upload = require('../middleware/upload.middleware');
 
 // Read Endpoints (Office Admin, Office Team & Maintenance Staff)
 router.get('/', getJobs);
@@ -28,6 +30,9 @@ router.put('/:id/stage', authorizeRoles('OFFICE_ADMIN', 'MAINTENANCE_STAFF'), mo
 
 // Update Status/Schedule (Office Admin, Office Team & Maintenance Staff)
 router.put('/:id/status', updateJobStatus);
+
+// Cancel/Reschedule Endpoint (Maintenance Staff Only)
+router.post('/:id/cancel', authorizeRoles('MAINTENANCE_STAFF'), upload.single('proof'), cancelJob);
 
 // Delete Endpoint (Office Admin Only)
 router.delete('/:id', authorizeRoles('OFFICE_ADMIN'), deleteJob);
