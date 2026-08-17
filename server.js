@@ -102,4 +102,10 @@ app.listen(PORT, async () => {
   console.log(`📡 Health Check URL: http://localhost:${PORT}/api/v1/health`);
   console.log(`=======================================================`);
   await testDbConnection();
+  
+  // Initialize Background Schedulers
+  const { initScheduler } = require('./scheduler/photoReminderJob');
+  const { initBookingScheduler } = require('./scheduler/bookingReminderJob');
+  initScheduler();
+  initBookingScheduler();
 });

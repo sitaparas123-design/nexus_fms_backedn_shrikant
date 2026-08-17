@@ -36,7 +36,6 @@ const formatJobRow = (r) => ({
   assignedStaffCode: r.staff_code || (r.assigned_staff_id ? `STF-${100 + r.assigned_staff_id}` : null),
   assignedStaffName: r.staff_name || null,
   assignedStaffColor: r.staff_color || '#009bf2',
-  quoteAmount: r.quote_amount ? parseFloat(r.quote_amount) : null,
   scheduledDate: r.scheduled_date ? String(r.scheduled_date).substring(0, 10) : null,
   scheduledTimeSlot: r.scheduled_time_slot || null,
   secureToken: r.secure_token,
@@ -497,10 +496,11 @@ const getJobCompletionEvidence = async (req, res, next) => {
     );
 
     // Fetch proof photos from staff_completion_media
-    const [mediaRows] = await pool.query(
-      'SELECT id, file_name, file_path, file_size_bytes, mime_type, created_at FROM staff_completion_media WHERE work_order_id = ?',
-      [id]
-    );
+    let mediaQuery = 'SELECT id, file_name, file_path, file_size_bytes, mime_type, created_at, media_type FROM staff_completion_media WHERE work_order_id = ?';
+    if (req.user.role === 'OFFICE_TEAM') {
+      mediaQuery += " AND media_type != 'RECEIPT'"; // Hide financial receipts from OFFICE_TEAM
+    }
+    const [mediaRows] = await pool.query(mediaQuery, [id]);
 
     res.status(200).json({
       success: true,

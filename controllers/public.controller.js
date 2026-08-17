@@ -41,7 +41,7 @@ const getPublicRequestByToken = async (req, res, next) => {
 
     // 2. Check booking_requests table
     const [bookingRows] = await pool.query(
-      `SELECT b.*, w.job_number, w.title, w.resident_name, w.property_address, w.description as job_desc
+      `SELECT b.*, w.job_number, w.title, w.resident_name, w.property_address, w.description as job_desc, w.duration_hours
        FROM booking_requests b
        JOIN work_orders w ON b.work_order_id = w.id
        WHERE b.secure_token = ?`,
@@ -61,6 +61,7 @@ const getPublicRequestByToken = async (req, res, next) => {
           residentName: b.resident_name,
           address: b.property_address,
           description: b.job_desc,
+          durationHours: parseFloat(b.duration_hours || 1.5),
           selectedDate: b.booked_date,
           selectedTimeSlot: b.booked_time_slot,
           status: b.status,
@@ -194,21 +195,20 @@ const submitPublicQuoteUpload = async (req, res, next) => {
     if (requestId) {
       await connection.query(
         'UPDATE quote_requests SET status = ?, resident_description_report = ?, submitted_at = NOW() WHERE id = ?',
-        ['SUBMITTED', userNotes || null, requestId]
+        ['COMPLETED', userNotes || null, requestId]
       );
     }
 
-    // Update work order description with resident upload notes (remains in 'Quotes' stage until Admin sends Quote)
+    // Update work order description and transition to READY_TO_QUOTE
     await connection.query(
       `UPDATE work_orders SET 
-        pipeline_stage = 'Quotes',
+        pipeline_stage = 'READY_TO_QUOTE',
         description = CASE 
           WHEN description IS NULL OR description = '' THEN ? 
           ELSE CONCAT(description, '\n\n[Resident Upload Notes]: ', ?) 
         END
        WHERE id = ?`,
       [noteText, noteText, workOrderId]
-
     );
 
     const [admins] = await connection.query("SELECT id FROM users WHERE role = 'OFFICE_ADMIN'");
@@ -221,8 +221,8 @@ const submitPublicQuoteUpload = async (req, res, next) => {
       await notificationService.createNotification({
         recipientUserId: admin.id,
         type: 'QUOTE_PHOTOS_SUBMITTED',
-        title: 'Resident submitted repair photos',
-        message: `Photos uploaded for ${jobTitle} by ${resName} at ${resAddress}`,
+        title: 'Quote photos/details received',
+        message: `Photos uploaded for ${jobTitle} by ${resName} at ${resAddress}. Work Order is ready to quote.`,
         relatedEntityType: 'work_orders',
         relatedEntityId: workOrderId,
         actionUrl: `/admin/quote-requests`
@@ -330,7 +330,7 @@ const submitPublicBooking = async (req, res, next) => {
     if (requestId) {
       await connection.query(
         'UPDATE booking_requests SET booked_date = ?, booked_time_slot = ?, status = ?, booked_at = NOW() WHERE id = ?',
-        [dateVal, slotVal, 'CONFIRMED', requestId]
+        [dateVal, slotVal, 'BOOKED', requestId]
       );
     }
 

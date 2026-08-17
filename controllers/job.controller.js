@@ -1,6 +1,8 @@
 const crypto = require('crypto');
 const { pool } = require('../config/db');
 const notificationService = require('../services/notification.service');
+const QuoteRequestService = require('../services/quoteRequest.service');
+const BookingRequestService = require('../services/bookingRequest.service');
 
 
 // Helper to format raw database row to Frontend job object
@@ -31,6 +33,7 @@ const formatJobRow = (r, role) => {
     scheduledTimeSlot: r.scheduled_time_slot || null,
     secureToken: r.secure_token,
     createdAt: r.created_at ? String(r.created_at).substring(0, 10) : null,
+    bookingStatus: r.booking_status || null,
   };
 
   // Financials
@@ -81,11 +84,13 @@ const getJobs = async (req, res, next) => {
         r.email as live_contact_email,
         r.address as live_property_address,
         u.full_name as staff_name,
-        sp.color_hex as staff_color
+        sp.color_hex as staff_color,
+        b.status as booking_status
       FROM work_orders w
       LEFT JOIN residents r ON w.resident_id = r.id
       LEFT JOIN staff_profiles sp ON w.assigned_staff_id = sp.id
       LEFT JOIN users u ON sp.user_id = u.id
+      LEFT JOIN booking_requests b ON w.id = b.work_order_id
       WHERE 1=1
     `;
 
@@ -343,6 +348,8 @@ const createJob = async (req, res, next) => {
 
     // Notification Triggers
     if (stage === 'Quotes') {
+      QuoteRequestService.triggerAutoPhotoRequest(result.insertId);
+      
       const [admins] = await pool.query("SELECT id FROM users WHERE role = 'OFFICE_ADMIN'");
       for (const admin of admins) {
         await notificationService.createNotification({
@@ -355,6 +362,10 @@ const createJob = async (req, res, next) => {
           actionUrl: `/admin/pipeline?stage=Quotes`
         });
       }
+    }
+
+    if (stage === 'Jobs') {
+      BookingRequestService.triggerAutoBookingRequest(result.insertId);
     }
 
     if (rawStaffId) {
@@ -417,7 +428,7 @@ const moveJobStage = async (req, res, next) => {
       });
     }
 
-    const [existing] = await pool.query('SELECT id, assigned_staff_id FROM work_orders WHERE id = ?', [id]);
+    const [existing] = await pool.query('SELECT id, assigned_staff_id, pipeline_stage FROM work_orders WHERE id = ?', [id]);
     if (existing.length === 0) {
       return res.status(404).json({
         success: false,
@@ -439,6 +450,14 @@ const moveJobStage = async (req, res, next) => {
     }
 
     await pool.query('UPDATE work_orders SET pipeline_stage = ? WHERE id = ?', [newStage, id]);
+
+    if (newStage === 'Quotes' && existing[0].pipeline_stage !== 'Quotes') {
+      QuoteRequestService.triggerAutoPhotoRequest(id);
+    }
+
+    if (newStage === 'Jobs' && existing[0].pipeline_stage !== 'Jobs') {
+      BookingRequestService.triggerAutoBookingRequest(id);
+    }
 
     const [updatedRows] = await pool.query(
       `SELECT 
@@ -517,6 +536,13 @@ const updateJobStatus = async (req, res, next) => {
       rawStaffId = rawStaffId.replace(/^(stf-|usr-)/, '');
     }
 
+    // Strict Role-Based Field Filtering
+    // Only OFFICE_ADMIN can update quote amount
+    let quoteVal = quote_amount || quoteAmount;
+    if (req.user.role !== 'OFFICE_ADMIN') {
+      quoteVal = undefined; // Strip it out for OFFICE_TEAM and MAINTENANCE_STAFF
+    }
+
     // Maintenance Staff Ownership Check: Staff can ONLY update jobs assigned to them
     if (req.user.role === 'MAINTENANCE_STAFF') {
       const [userStaffProfile] = await pool.query('SELECT id FROM staff_profiles WHERE user_id = ?', [req.user.id]);
@@ -539,7 +565,6 @@ const updateJobStatus = async (req, res, next) => {
     }
 
     const newStage = pipeline_stage || section;
-    const quoteVal = quote_amount || quoteAmount;
     const schedDate = scheduled_date || scheduledDate;
     const schedSlot = scheduled_time_slot || scheduledTimeSlot;
 
@@ -610,6 +635,14 @@ const updateJobStatus = async (req, res, next) => {
           actionUrl: '/maintenance/calendar'
         });
       }
+    }
+
+    if (newStage === 'Quotes' && existingJob.pipeline_stage !== 'Quotes') {
+      QuoteRequestService.triggerAutoPhotoRequest(id);
+    }
+
+    if (newStage === 'Jobs' && existingJob.pipeline_stage !== 'Jobs') {
+      BookingRequestService.triggerAutoBookingRequest(id);
     }
 
     if (newStage === 'Completed Quotes' && existingJob.pipeline_stage !== 'Completed Quotes') {
@@ -793,9 +826,7 @@ const cancelJob = async (req, res, next) => {
     // 5. Handle File Upload if Tenant Cancelled
     if (req.files && req.files.proof) {
       const file = req.files.proof;
-      // Wait, let's assume multer handles it and puts it in req.file or req.files.
-      // We will create the cancellation_media_uploads record in the media controller or here.
-      // Since it's a multipart form, we might have req.file here if route uses upload.single('proof').
+      // We assume it's handled properly if setup via Multer.
     }
     
     if (req.file) {
@@ -807,25 +838,66 @@ const cancelJob = async (req, res, next) => {
       );
     }
 
-    await connection.commit();
-    connection.release();
+    // 6. Stop old booking reminder workflow
+    await connection.query(
+      `UPDATE booking_requests SET status = 'CANCELLED' WHERE work_order_id = ? AND status = 'WAITING_FOR_BOOKING'`,
+      [id]
+    );
 
-    // 6. Notify Office Team and Admin
-    const [officeUsers] = await pool.query("SELECT id, role FROM users WHERE role IN ('OFFICE_ADMIN', 'OFFICE_TEAM')");
+    // 7. Notify Office Team and Admin using the central dispatcher
+    const [officeUsers] = await connection.query("SELECT id, role FROM users WHERE role IN ('OFFICE_ADMIN', 'OFFICE_TEAM')");
+    const dispatcher = require('../services/notification.service');
+    
+    const notificationType = cancellationType === 'TECHNICIAN_CANCELLED' ? 'TECHNICIAN_CANCELLED' : 'TENANT_CANCELLED';
+    const notificationTitle = cancellationType === 'TECHNICIAN_CANCELLED' ? 'Urgent: Tech Cancelled Job' : 'Job Cancelled by Tenant';
+    const messageTemplate = `Job #{{id}} ({{title}}) cancelled. Reason: {{reason}}. Rebooking required.`;
+
     for (const u of officeUsers) {
-      await notificationService.createNotification({
+      await dispatcher.dispatch({
         recipientUserId: u.id,
-        type: cancellationType === 'TECHNICIAN_CANCELLED' ? 'TECHNICIAN_CANCELLED_JOB' : 'TENANT_CANCELLED_JOB',
-        title: cancellationType === 'TECHNICIAN_CANCELLED' ? 'Urgent: Tech Cancelled Job' : 'Job Cancelled by Tenant',
-        message: `Job #${id} (${job.title}) cancelled. Reason: ${reason}. Rebooking required.`,
+        recipientRole: u.role,
+        type: notificationType,
+        title: notificationTitle,
+        messageTemplate,
+        structuredData: {
+          id,
+          title: job.title,
+          reason
+        },
         relatedEntityType: 'work_orders',
         relatedEntityId: id,
-        actionUrl: `/admin/pipeline` // Or office equivalent
+        actionUrl: `/admin/pipeline`,
+        channels: ['IN_APP'], // Internal operational notification
+        connection
       });
     }
 
-    // Optionally notify Tenant (placeholder via existing service)
-    // await notificationService.dispatchTenantSms(...)
+    // Optionally notify Tenant (via central dispatcher)
+    if (cancellationType === 'TECHNICIAN_CANCELLED' && job.resident_name) {
+       const [residentRows] = await connection.query('SELECT email, phone FROM residents WHERE full_name = ? LIMIT 1', [job.resident_name]);
+       const residentEmail = residentRows.length > 0 ? residentRows[0].email : null;
+       const residentPhone = residentRows.length > 0 ? residentRows[0].phone : null;
+
+       await dispatcher.dispatch({
+         recipientUserId: null,
+         recipientRole: 'TENANT',
+         type: 'TECHNICIAN_CANCELLED',
+         title: 'Appointment Update — New Appointment Required',
+         messageTemplate: `Hi {{resident_name}},\n\nWe sincerely apologize, but your upcoming maintenance appointment has been cancelled. Please select a new appointment time using the booking link we will send you shortly.`,
+         structuredData: { resident_name: job.resident_name },
+         channels: ['EMAIL', 'SMS'],
+         contactEmail: residentEmail,
+         contactPhone: residentPhone,
+         connection
+       });
+    }
+
+    await connection.commit();
+    connection.release();
+
+    // 8. Generate a new booking/rebooking request 
+    const { triggerAutoBookingRequest } = require('../services/bookingRequest.service');
+    await triggerAutoBookingRequest(id);
 
     res.status(200).json({
       success: true,

@@ -20,7 +20,7 @@ const upload = require('../middleware/upload.middleware');
 // Read Endpoints (Office Admin, Office Team & Maintenance Staff)
 router.get('/', getJobs);
 router.get('/:id', getJobById);
-router.get('/:id/completion-evidence', authorizeRoles('OFFICE_ADMIN', 'MAINTENANCE_STAFF'), getJobCompletionEvidence);
+router.get('/:id/completion-evidence', authorizeRoles('OFFICE_ADMIN', 'OFFICE_TEAM', 'MAINTENANCE_STAFF'), getJobCompletionEvidence);
 
 // Create Endpoint (Office Admin Only)
 router.post('/', authorizeRoles('OFFICE_ADMIN'), createJob);

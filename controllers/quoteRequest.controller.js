@@ -20,6 +20,8 @@ const getQuoteRequests = async (req, res, next) => {
         q.resident_description_report as residentComments,
         q.submitted_at as submittedAt,
         q.created_at as createdAt,
+        q.last_photo_reminder_at as lastPhotoReminderAt,
+        q.photo_reminder_count as photoReminderCount,
         w.resident_name as tenantName,
         w.property_address as address,
         w.description as description,

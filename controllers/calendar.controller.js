@@ -33,7 +33,7 @@ const formatJobRow = (r, role) => {
     createdAt: r.created_at ? String(r.created_at).substring(0, 10) : null,
   };
 
-  if (role === 'OFFICE_TEAM') {
+  if (role === 'OFFICE_TEAM' || role === 'MAINTENANCE_STAFF') {
     delete job.quoteAmount;
   }
   return job;
@@ -321,6 +321,12 @@ const dispatchJob = async (req, res, next) => {
         pipeline_stage = 'Jobs'
        WHERE id = ?`,
       [finalStaffId, targetDate, targetSlot, targetJobId]
+    );
+
+    // Stop reminders if this job had a booking request
+    await connection.query(
+      "UPDATE booking_requests SET status = 'BOOKED', booked_at = NOW() WHERE work_order_id = ? AND status = 'WAITING_FOR_BOOKING'",
+      [targetJobId]
     );
 
     await connection.commit();
