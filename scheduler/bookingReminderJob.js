@@ -89,7 +89,7 @@ const runBookingReminderJob = async () => {
                  actionUrl: bookingLink,
                  relatedEntityType: 'work_orders',
                  relatedEntityId: req.work_order_id,
-                 channels: ['IN_APP', 'EMAIL', 'SMS'],
+                 channels: ['EMAIL', 'SMS'],
                  contactEmail: req.resident_email,
                  contactPhone: req.resident_phone,
                  connection // Pass transaction

@@ -34,6 +34,15 @@ const formatJobRow = (r, role) => {
     secureToken: r.secure_token,
     createdAt: r.created_at ? String(r.created_at).substring(0, 10) : null,
     bookingStatus: r.booking_status || null,
+    
+    // Cancellation Properties
+    cancellationType: r.cancellation_type || null,
+    cancellationReason: r.cancellation_reason || null,
+    cancelledBy: r.cancelled_by || null,
+    cancellerName: r.canceller_name || null,
+    cancelledAt: r.cancelled_at || null,
+    previousAppointmentDate: r.previous_appointment_date ? String(r.previous_appointment_date).substring(0, 10) : null,
+    previousAppointmentTime: r.previous_appointment_time || null,
   };
 
   // Financials
@@ -85,12 +94,14 @@ const getJobs = async (req, res, next) => {
         r.address as live_property_address,
         u.full_name as staff_name,
         sp.color_hex as staff_color,
-        b.status as booking_status
+        b.status as booking_status,
+        u_cancel.full_name as canceller_name
       FROM work_orders w
       LEFT JOIN residents r ON w.resident_id = r.id
       LEFT JOIN staff_profiles sp ON w.assigned_staff_id = sp.id
       LEFT JOIN users u ON sp.user_id = u.id
       LEFT JOIN booking_requests b ON w.id = b.work_order_id
+      LEFT JOIN users u_cancel ON w.cancelled_by = u_cancel.id
       WHERE 1=1
     `;
 
@@ -153,11 +164,13 @@ const getJobById = async (req, res, next) => {
         r.email as live_contact_email,
         r.address as live_property_address,
         u.full_name as staff_name,
-        sp.color_hex as staff_color
+        sp.color_hex as staff_color,
+        u_cancel.full_name as canceller_name
       FROM work_orders w
       LEFT JOIN residents r ON w.resident_id = r.id
       LEFT JOIN staff_profiles sp ON w.assigned_staff_id = sp.id
       LEFT JOIN users u ON sp.user_id = u.id
+      LEFT JOIN users u_cancel ON w.cancelled_by = u_cancel.id
       WHERE w.id = ? OR w.job_number = ? OR w.secure_token = ?`,
       [id, id, id]
     );
@@ -770,7 +783,7 @@ const cancelJob = async (req, res, next) => {
 
     // 1. Validate Job & Staff Ownership
     const [existing] = await connection.query(
-      'SELECT id, assigned_staff_id, scheduled_date, scheduled_time_slot, pipeline_stage, title, resident_name FROM work_orders WHERE id = ?',
+      'SELECT id, assigned_staff_id, assigned_staff_ids, scheduled_date, scheduled_time_slot, pipeline_stage, title, resident_name FROM work_orders WHERE id = ?',
       [id]
     );
 
@@ -790,7 +803,15 @@ const cancelJob = async (req, res, next) => {
       const [userStaffProfile] = await connection.query('SELECT id FROM staff_profiles WHERE user_id = ?', [req.user.id]);
       const currentStaffProfileId = userStaffProfile.length > 0 ? userStaffProfile[0].id : null;
 
-      if (!currentStaffProfileId || job.assigned_staff_id !== currentStaffProfileId) {
+      let isAssigned = (job.assigned_staff_id === currentStaffProfileId);
+      if (!isAssigned && job.assigned_staff_ids) {
+        const ids = typeof job.assigned_staff_ids === 'string' ? JSON.parse(job.assigned_staff_ids) : job.assigned_staff_ids;
+        if (Array.isArray(ids) && ids.includes(currentStaffProfileId)) {
+          isAssigned = true;
+        }
+      }
+
+      if (!currentStaffProfileId || !isAssigned) {
         connection.release();
         return res.status(403).json({
           success: false,
