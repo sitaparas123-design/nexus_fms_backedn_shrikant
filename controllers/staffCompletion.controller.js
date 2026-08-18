@@ -33,6 +33,7 @@ const formatJobRow = (r) => ({
   description: r.description || '',
   durationHours: parseFloat(r.duration_hours || 1.5),
   assignedStaffId: r.assigned_staff_id || null,
+  assignedStaffIds: r.assigned_staff_ids ? (typeof r.assigned_staff_ids === 'string' ? JSON.parse(r.assigned_staff_ids) : r.assigned_staff_ids) : [],
   assignedStaffCode: r.staff_code || (r.assigned_staff_id ? `STF-${100 + r.assigned_staff_id}` : null),
   assignedStaffName: r.staff_name || null,
   assignedStaffColor: r.staff_color || '#009bf2',
@@ -76,8 +77,8 @@ const getMyAssignedJobs = async (req, res, next) => {
 
     // Office Admin views all, Staff views ONLY assigned jobs
     if (req.user.role === 'MAINTENANCE_STAFF') {
-      sql += ' WHERE w.assigned_staff_id = ?';
-      queryParams.push(staffProfileId);
+      sql += ' WHERE (w.assigned_staff_id = ? OR (w.assigned_staff_ids IS NOT NULL AND JSON_CONTAINS(w.assigned_staff_ids, CAST(? AS JSON), "$")))';
+      queryParams.push(staffProfileId, staffProfileId);
     }
 
     sql += ' ORDER BY w.created_at DESC';
@@ -131,7 +132,14 @@ const getMyAssignedJobById = async (req, res, next) => {
     const job = rows[0];
 
     // Strict Ownership Enforcement: Maintenance Staff can ONLY view their assigned job
-    if (req.user.role === 'MAINTENANCE_STAFF' && job.assigned_staff_id !== staffProfileId) {
+    let isAssigned = (job.assigned_staff_id === staffProfileId);
+    if (!isAssigned && job.assigned_staff_ids) {
+      const ids = typeof job.assigned_staff_ids === 'string' ? JSON.parse(job.assigned_staff_ids) : job.assigned_staff_ids;
+      if (Array.isArray(ids) && ids.includes(staffProfileId)) {
+        isAssigned = true;
+      }
+    }
+    if (req.user.role === 'MAINTENANCE_STAFF' && !isAssigned) {
       return res.status(403).json({
         success: false,
         message: 'Forbidden. You are not authorized to view another technician’s assigned work order.',
@@ -169,7 +177,7 @@ const submitWorkReport = async (req, res, next) => {
 
     const staffProfileId = await getStaffProfileId(req.user.id);
 
-    const [jobRows] = await pool.query('SELECT id, assigned_staff_id FROM work_orders WHERE id = ?', [id]);
+    const [jobRows] = await pool.query('SELECT id, assigned_staff_id, assigned_staff_ids FROM work_orders WHERE id = ?', [id]);
     if (jobRows.length === 0) {
       return res.status(404).json({
         success: false,
@@ -180,7 +188,14 @@ const submitWorkReport = async (req, res, next) => {
     const job = jobRows[0];
 
     // Strict Ownership Check
-    if (req.user.role === 'MAINTENANCE_STAFF' && job.assigned_staff_id !== staffProfileId) {
+    let isAssigned = (job.assigned_staff_id === staffProfileId);
+    if (!isAssigned && job.assigned_staff_ids) {
+      const ids = typeof job.assigned_staff_ids === 'string' ? JSON.parse(job.assigned_staff_ids) : job.assigned_staff_ids;
+      if (Array.isArray(ids) && ids.includes(staffProfileId)) {
+        isAssigned = true;
+      }
+    }
+    if (req.user.role === 'MAINTENANCE_STAFF' && !isAssigned) {
       return res.status(403).json({
         success: false,
         message: 'Forbidden. You cannot submit a work report for another technician’s job.',
@@ -238,7 +253,7 @@ const uploadCompletionPhotos = async (req, res, next) => {
     const { id } = req.params;
     const staffProfileId = await getStaffProfileId(req.user.id);
 
-    const [jobRows] = await pool.query('SELECT id, assigned_staff_id FROM work_orders WHERE id = ?', [id]);
+    const [jobRows] = await pool.query('SELECT id, assigned_staff_id, assigned_staff_ids FROM work_orders WHERE id = ?', [id]);
     if (jobRows.length === 0) {
       return res.status(404).json({
         success: false,
@@ -249,7 +264,14 @@ const uploadCompletionPhotos = async (req, res, next) => {
     const job = jobRows[0];
 
     // Strict Ownership Check
-    if (req.user.role === 'MAINTENANCE_STAFF' && job.assigned_staff_id !== staffProfileId) {
+    let isAssigned = (job.assigned_staff_id === staffProfileId);
+    if (!isAssigned && job.assigned_staff_ids) {
+      const ids = typeof job.assigned_staff_ids === 'string' ? JSON.parse(job.assigned_staff_ids) : job.assigned_staff_ids;
+      if (Array.isArray(ids) && ids.includes(staffProfileId)) {
+        isAssigned = true;
+      }
+    }
+    if (req.user.role === 'MAINTENANCE_STAFF' && !isAssigned) {
       return res.status(403).json({
         success: false,
         message: 'Forbidden. You cannot upload completion photos for another technician’s job.',
@@ -336,7 +358,14 @@ const markJobComplete = async (req, res, next) => {
     const job = jobRows[0];
 
     // Strict Ownership Check
-    if (req.user.role === 'MAINTENANCE_STAFF' && job.assigned_staff_id !== staffProfileId) {
+    let isAssigned = (job.assigned_staff_id === staffProfileId);
+    if (!isAssigned && job.assigned_staff_ids) {
+      const ids = typeof job.assigned_staff_ids === 'string' ? JSON.parse(job.assigned_staff_ids) : job.assigned_staff_ids;
+      if (Array.isArray(ids) && ids.includes(staffProfileId)) {
+        isAssigned = true;
+      }
+    }
+    if (req.user.role === 'MAINTENANCE_STAFF' && !isAssigned) {
       return res.status(403).json({
         success: false,
         message: 'Forbidden. You cannot complete another technician’s work order.',
@@ -463,7 +492,7 @@ const getJobCompletionEvidence = async (req, res, next) => {
     const { id } = req.params;
     const staffProfileId = await getStaffProfileId(req.user.id);
 
-    const [jobRows] = await pool.query('SELECT id, job_number, title, assigned_staff_id, pipeline_stage FROM work_orders WHERE id = ?', [id]);
+    const [jobRows] = await pool.query('SELECT id, job_number, title, assigned_staff_id, assigned_staff_ids, pipeline_stage FROM work_orders WHERE id = ?', [id]);
     if (jobRows.length === 0) {
       return res.status(404).json({
         success: false,
@@ -474,7 +503,14 @@ const getJobCompletionEvidence = async (req, res, next) => {
     const job = jobRows[0];
 
     // Staff Authorization Check: Maintenance Staff can ONLY view evidence for their own assigned job
-    if (req.user.role === 'MAINTENANCE_STAFF' && job.assigned_staff_id !== staffProfileId) {
+    let isAssigned = (job.assigned_staff_id === staffProfileId);
+    if (!isAssigned && job.assigned_staff_ids) {
+      const ids = typeof job.assigned_staff_ids === 'string' ? JSON.parse(job.assigned_staff_ids) : job.assigned_staff_ids;
+      if (Array.isArray(ids) && ids.includes(staffProfileId)) {
+        isAssigned = true;
+      }
+    }
+    if (req.user.role === 'MAINTENANCE_STAFF' && !isAssigned) {
       return res.status(403).json({
         success: false,
         message: 'Forbidden. You are not authorized to view completion evidence for another technician’s work order.',
@@ -578,13 +614,21 @@ const completeJobAtomic = async (req, res, next) => {
 
     await connection.beginTransaction();
 
-    const [jobRows] = await connection.query('SELECT id, assigned_staff_id, pipeline_stage, title FROM work_orders WHERE id = ? FOR UPDATE', [id]);
+    const [jobRows] = await connection.query('SELECT id, assigned_staff_id, assigned_staff_ids, pipeline_stage, title FROM work_orders WHERE id = ? FOR UPDATE', [id]);
     if (jobRows.length === 0) {
       throw { status: 404, message: `Work order not found with ID ${id}` };
     }
     const job = jobRows[0];
 
-    if (job.assigned_staff_id !== staffProfileId) {
+    // Strict Ownership Check
+    let isAssigned = (job.assigned_staff_id === staffProfileId);
+    if (!isAssigned && job.assigned_staff_ids) {
+      const ids = typeof job.assigned_staff_ids === 'string' ? JSON.parse(job.assigned_staff_ids) : job.assigned_staff_ids;
+      if (Array.isArray(ids) && ids.includes(staffProfileId)) {
+        isAssigned = true;
+      }
+    }
+    if (job.assigned_staff_id !== staffProfileId && !isAssigned) {
       throw { status: 403, message: 'Forbidden. You can only complete your own assigned work order.' };
     }
 

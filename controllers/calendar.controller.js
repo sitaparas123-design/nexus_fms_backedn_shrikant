@@ -119,12 +119,12 @@ const getCalendar = async (req, res, next) => {
 
     // Filter by Staff ID
     if (req.user.role === 'MAINTENANCE_STAFF') {
-      sql += ' AND w.assigned_staff_id = ?';
-      queryParams.push(staffProfileId);
+      sql += ' AND (w.assigned_staff_id = ? OR (w.assigned_staff_ids IS NOT NULL AND JSON_CONTAINS(w.assigned_staff_ids, CAST(? AS JSON), "$")))';
+      queryParams.push(staffProfileId, staffProfileId);
     } else if (staffId && staffId !== 'ALL') {
       const cleanId = parseInt(String(staffId).replace(/^(stf-|usr-)/, ''), 10);
-      sql += ' AND w.assigned_staff_id = ?';
-      queryParams.push(cleanId);
+      sql += ' AND (w.assigned_staff_id = ? OR (w.assigned_staff_ids IS NOT NULL AND JSON_CONTAINS(w.assigned_staff_ids, CAST(? AS JSON), "$")))';
+      queryParams.push(cleanId, cleanId);
     }
 
     // Filter by Date Range

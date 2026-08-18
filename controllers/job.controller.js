@@ -104,16 +104,16 @@ const getJobs = async (req, res, next) => {
     // Role-based data isolation
     if (req.user && req.user.role === 'MAINTENANCE_STAFF') {
       if (req.user.staffProfileId) {
-        sql += ' AND w.assigned_staff_id = ?';
-        queryParams.push(req.user.staffProfileId);
+        sql += ' AND (w.assigned_staff_id = ? OR (w.assigned_staff_ids IS NOT NULL AND JSON_CONTAINS(w.assigned_staff_ids, CAST(? AS JSON), "$")))';
+        queryParams.push(req.user.staffProfileId, req.user.staffProfileId);
       } else {
         // If they have no profile yet, they shouldn't see any jobs
         sql += ' AND w.assigned_staff_id = -1';
       }
     } else if (staffId && staffId.trim() !== '' && staffId !== 'ALL') {
-      const cleanStaffId = staffId.replace(/^(stf-|usr-)/, '');
-      sql += ' AND w.assigned_staff_id = ?';
-      queryParams.push(cleanStaffId);
+      const cleanStaffId = parseInt(staffId.replace(/^(stf-|usr-)/, ''), 10);
+      sql += ' AND (w.assigned_staff_id = ? OR (w.assigned_staff_ids IS NOT NULL AND JSON_CONTAINS(w.assigned_staff_ids, CAST(? AS JSON), "$")))';
+      queryParams.push(cleanStaffId, cleanStaffId);
     }
 
     if (search && search.trim() !== '') {
@@ -282,7 +282,7 @@ const createJob = async (req, res, next) => {
     }
 
     // Clean & resolve Staff Profile ID (supports profile_id or user_id)
-    let rawStaffId = assigned_staff_id || assignedStaffId || null;
+    let rawStaffId = assigned_staff_id || assignedStaffId || (staffIdsArr.length > 0 ? staffIdsArr[0] : null);
     if (rawStaffId) {
       const cleanId = String(rawStaffId).replace(/^(stf-|usr-)/, '');
       const [spRows] = await pool.query(
@@ -515,6 +515,7 @@ const updateJobStatus = async (req, res, next) => {
     const {
       pipeline_stage, section,
       assigned_staff_id, assignedStaffId,
+      assigned_staff_ids, assignedStaffIds,
       quote_amount, quoteAmount,
       scheduled_date, scheduledDate,
       scheduled_time_slot, scheduledTimeSlot,
@@ -531,9 +532,22 @@ const updateJobStatus = async (req, res, next) => {
       });
     }
 
+    let staffIdsArr = assigned_staff_ids || assignedStaffIds;
+    let staffIdsJson = undefined;
+    if (staffIdsArr !== undefined) {
+      if (Array.isArray(staffIdsArr)) {
+        staffIdsJson = staffIdsArr.length > 0 ? JSON.stringify(staffIdsArr) : null;
+      }
+    }
+
     let rawStaffId = assigned_staff_id || assignedStaffId;
     if (rawStaffId && typeof rawStaffId === 'string') {
       rawStaffId = rawStaffId.replace(/^(stf-|usr-)/, '');
+    }
+
+    // Sync rawStaffId with first element in staffIdsArr if rawStaffId is not passed
+    if (rawStaffId === undefined && staffIdsArr !== undefined) {
+      rawStaffId = staffIdsArr.length > 0 ? staffIdsArr[0] : null;
     }
 
     // Strict Role-Based Field Filtering
@@ -568,16 +582,39 @@ const updateJobStatus = async (req, res, next) => {
     const schedDate = scheduled_date || scheduledDate;
     const schedSlot = scheduled_time_slot || scheduledTimeSlot;
 
-    await pool.query(
-      `UPDATE work_orders SET
-        pipeline_stage = COALESCE(?, pipeline_stage),
-        assigned_staff_id = COALESCE(?, assigned_staff_id),
-        quote_amount = COALESCE(?, quote_amount),
-        scheduled_date = COALESCE(?, scheduled_date),
-        scheduled_time_slot = COALESCE(?, scheduled_time_slot)
-       WHERE id = ?`,
-      [newStage || null, rawStaffId || null, quoteVal || null, schedDate || null, schedSlot || null, id]
-    );
+    const updates = [];
+    const values = [];
+
+    if (newStage !== undefined) {
+      updates.push('pipeline_stage = ?');
+      values.push(newStage);
+    }
+    if (rawStaffId !== undefined) {
+      updates.push('assigned_staff_id = ?');
+      values.push(rawStaffId);
+    }
+    if (staffIdsJson !== undefined) {
+      updates.push('assigned_staff_ids = ?');
+      values.push(staffIdsJson);
+    }
+    if (quoteVal !== undefined) {
+      updates.push('quote_amount = ?');
+      values.push(quoteVal);
+    }
+    if (schedDate !== undefined) {
+      updates.push('scheduled_date = ?');
+      values.push(schedDate);
+    }
+    if (schedSlot !== undefined) {
+      updates.push('scheduled_time_slot = ?');
+      values.push(schedSlot);
+    }
+
+    if (updates.length > 0) {
+      let updateSql = `UPDATE work_orders SET ${updates.join(', ')} WHERE id = ?`;
+      values.push(id);
+      await pool.query(updateSql, values);
+    }
 
     // Notification Triggers
     const existingJob = existing[0];
