@@ -10,29 +10,6 @@ const getDashboardStats = async (req, res, next) => {
     const staffFilter = isStaff ? `WHERE assigned_staff_id = ${staffId}` : '';
     const staffFilterAnd = isStaff ? `AND assigned_staff_id = ${staffId}` : '';
     const staffFilterWhereAnd = isStaff ? `WHERE assigned_staff_id = ${staffId} AND` : 'WHERE';
-
-    // 1. Pipeline stage counts
-    const [stageCounts] = await pool.query(`
-      SELECT pipeline_stage AS stage, COUNT(*) AS count
-      FROM work_orders
-      ${staffFilter}
-      GROUP BY pipeline_stage
-    `);
-
-    const stageMap = {
-      Quotes: 0,
-      'Completed Quotes': 0,
-      'Jobs Waiting Booking': 0,
-      Jobs: 0,
-      'Completed Jobs': 0,
-    };
-    stageCounts.forEach(r => {
-      if (Object.prototype.hasOwnProperty.call(stageMap, r.stage)) {
-        stageMap[r.stage] = Number(r.count);
-      }
-    });
-
-    // 2. Staff workload — job count per staff using MySQL DATE_FORMAT for ISO date
     const staffWorkloadQuery = isStaff 
       ? `SELECT
           u.id            AS userId,
@@ -80,7 +57,92 @@ const getDashboardStats = async (req, res, next) => {
         GROUP BY u.id, sp.id
         ORDER BY u.created_at DESC`;
 
-    const [staffRows] = await pool.query(staffWorkloadQuery);
+    // Parallel query execution for optimal performance
+    const [
+      [stageCounts],
+      [staffRows],
+      [trendRows],
+      [recentRows],
+      [[qrCount]],
+      [[totalCount]],
+      [allJobsRows]
+    ] = await Promise.all([
+      // 1. Pipeline stage counts
+      pool.query(`
+        SELECT pipeline_stage AS stage, COUNT(*) AS count
+        FROM work_orders
+        ${staffFilter}
+        GROUP BY pipeline_stage
+      `),
+
+      // 2. Staff workload
+      pool.query(staffWorkloadQuery),
+
+      // 3. Weekly trend (last 30 days)
+      pool.query(`
+        SELECT
+          DATE_FORMAT(created_at, '%Y-%m-%d') AS day,
+          pipeline_stage                       AS stage,
+          COUNT(*)                             AS count
+        FROM work_orders
+        ${staffFilterWhereAnd} created_at >= DATE_SUB(CURDATE(), INTERVAL 29 DAY)
+        GROUP BY DATE_FORMAT(created_at, '%Y-%m-%d'), pipeline_stage
+        ORDER BY day ASC
+      `),
+
+      // 4. Recent jobs
+      pool.query(`
+        SELECT
+          w.id,
+          w.job_number         AS jobNumber,
+          w.title,
+          w.description,
+          w.pipeline_stage     AS section,
+          w.resident_name      AS tenantName,
+          r.full_name          AS liveTenantName,
+          w.property_address   AS address,
+          r.address            AS liveAddress,
+          DATE_FORMAT(w.created_at, '%Y-%m-%d') AS createdAt,
+          u.full_name          AS staffName,
+          sp.color_hex         AS staffColor
+        FROM work_orders w
+        LEFT JOIN residents r  ON w.resident_id      = r.id
+        LEFT JOIN staff_profiles sp ON w.assigned_staff_id = sp.id
+        LEFT JOIN users u      ON sp.user_id          = u.id
+        ${staffFilter}
+        ORDER BY w.created_at DESC
+        LIMIT 20
+      `),
+
+      // 5. Pending quote requests
+      pool.query(`
+        SELECT COUNT(*) AS count FROM quote_requests
+        WHERE status IN ('PHOTO_REQUEST_PENDING', 'PENDING')
+      `),
+
+      // 6. Total jobs count
+      pool.query(`
+        SELECT COUNT(*) AS count FROM work_orders ${staffFilter}
+      `),
+
+      // 7. Category breakdown titles
+      pool.query(`
+        SELECT title, description FROM work_orders ${staffFilter}
+      `)
+    ]);
+
+    const stageMap = {
+      Quotes: 0,
+      'Completed Quotes': 0,
+      'Jobs Waiting Booking': 0,
+      Jobs: 0,
+      'Completed Jobs': 0,
+    };
+    stageCounts.forEach(r => {
+      if (Object.prototype.hasOwnProperty.call(stageMap, r.stage)) {
+        stageMap[r.stage] = Number(r.count);
+      }
+    });
 
     const staffWorkload = staffRows.map(r => ({
       id:         r.profileId ? `stf-${r.profileId}` : `usr-${r.userId}`,
@@ -100,26 +162,12 @@ const getDashboardStats = async (req, res, next) => {
       activeJobs:  Number(r.activeJobs || 0),
     }));
 
-    // 3. Weekly trend — last 30 days grouped by day
-    //    FIX: Use DATE_FORMAT so the value is always a proper YYYY-MM-DD string
-    const [trendRows] = await pool.query(`
-      SELECT
-        DATE_FORMAT(created_at, '%Y-%m-%d') AS day,
-        pipeline_stage                       AS stage,
-        COUNT(*)                             AS count
-      FROM work_orders
-      ${staffFilterWhereAnd} created_at >= DATE_SUB(CURDATE(), INTERVAL 29 DAY)
-      GROUP BY DATE_FORMAT(created_at, '%Y-%m-%d'), pipeline_stage
-      ORDER BY day ASC
-    `);
-
     // Build last-30-days array — show last 7 in chart but include 30d of data
     const daysArr = [];
     const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
     for (let i = 29; i >= 0; i--) {
       const d = new Date();
       d.setDate(d.getDate() - i);
-      // Always format as YYYY-MM-DD in local time (avoid UTC shift)
       const yr  = d.getFullYear();
       const mo  = String(d.getMonth() + 1).padStart(2, '0');
       const dy  = String(d.getDate()).padStart(2, '0');
@@ -134,7 +182,6 @@ const getDashboardStats = async (req, res, next) => {
     }
 
     trendRows.forEach(r => {
-      // r.day is already 'YYYY-MM-DD' from DATE_FORMAT
       const entry = daysArr.find(d => d.date === r.day);
       if (!entry) return;
       if (r.stage === 'Quotes' || r.stage === 'Completed Quotes') {
@@ -146,59 +193,18 @@ const getDashboardStats = async (req, res, next) => {
       }
     });
 
-    // 4. Recent jobs — include description for category breakdown
-    //    FIX: add w.description + DATE_FORMAT for consistent createdAt
-    const [recentRows] = await pool.query(`
-      SELECT
-        w.id,
-        w.job_number         AS jobNumber,
-        w.title,
-        w.description,
-        w.pipeline_stage     AS section,
-        w.resident_name      AS tenantName,
-        r.full_name          AS liveTenantName,
-        w.property_address   AS address,
-        r.address            AS liveAddress,
-        DATE_FORMAT(w.created_at, '%Y-%m-%d') AS createdAt,
-        u.full_name          AS staffName,
-        sp.color_hex         AS staffColor
-      FROM work_orders w
-      LEFT JOIN residents r  ON w.resident_id      = r.id
-      LEFT JOIN staff_profiles sp ON w.assigned_staff_id = sp.id
-      LEFT JOIN users u      ON sp.user_id          = u.id
-      ${staffFilter}
-      ORDER BY w.created_at DESC
-      LIMIT 20
-    `);
-
     const recentJobs = recentRows.map(r => ({
       id:          r.id,
       jobNumber:   r.jobNumber,
       title:       r.title       || '',
-      description: r.description || '',   // FIX: include description
+      description: r.description || '',
       section:     r.section,
       tenantName:  r.liveTenantName || r.tenantName || '',
       address:     r.liveAddress   || r.address     || '',
-      createdAt:   r.createdAt     || null,          // Already YYYY-MM-DD from DATE_FORMAT
+      createdAt:   r.createdAt     || null,
       staffName:   r.staffName     || null,
       staffColor:  r.staffColor    || '#009bf2',
     }));
-
-    // 5. Quote requests — pending
-    const [[qrCount]] = await pool.query(`
-      SELECT COUNT(*) AS count FROM quote_requests
-      WHERE status IN ('PHOTO_REQUEST_PENDING', 'PENDING')
-    `);
-
-    // 6. Total jobs
-    const [[totalCount]] = await pool.query(
-      `SELECT COUNT(*) AS count FROM work_orders ${staffFilter}`
-    );
-
-    // 7. All-time category breakdown from all jobs
-    const [allJobsRows] = await pool.query(`
-      SELECT title, description FROM work_orders ${staffFilter}
-    `);
 
     const catCounts = {
       'Plumbing & Leaks':      0,
@@ -232,9 +238,9 @@ const getDashboardStats = async (req, res, next) => {
         stageCounts:           stageMap,
         totalJobs:             Number(totalCount.count),
         staffWorkload,
-        weeklyTrend:           daysArr,   // 30 days
+        weeklyTrend:           daysArr,
         recentJobs,
-        categoryBreakdown,                // Now computed server-side
+        categoryBreakdown,
         pendingQuoteRequests:  Number(qrCount.count),
       },
     });

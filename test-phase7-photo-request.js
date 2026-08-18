@@ -72,9 +72,10 @@ async function runPhase7Tests() {
     let mockJobId;
     try {
       const mockJobNumber = 'JOB-TEST-' + Math.floor(Math.random() * 1000000);
+      const mockToken = 'dummy_tok_' + Math.random().toString(36).substring(2) + Date.now();
       const [mockJobRes] = await pool.query(
-        "INSERT INTO work_orders (job_number, title, pipeline_stage, resident_name, contact_phone, property_address, secure_token) VALUES (?, 'Mock Schedule Test', 'Quotes', 'Mock Resident', '123', 'Mock Address', 'dummy_secure_token_123')",
-        [mockJobNumber]
+        "INSERT INTO work_orders (job_number, title, pipeline_stage, resident_name, contact_phone, property_address, secure_token) VALUES (?, 'Mock Schedule Test', 'Quotes', 'Mock Resident', '123', 'Mock Address', ?)",
+        [mockJobNumber, mockToken]
       );
       mockJobId = mockJobRes.insertId;
       console.log('✅ Mock Job created (ID: ' + mockJobId + ')');

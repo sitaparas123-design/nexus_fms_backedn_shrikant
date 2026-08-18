@@ -517,32 +517,31 @@ const getJobCompletionEvidence = async (req, res, next) => {
       });
     }
 
-    // Fetch report from staff_job_completions
-    const [reports] = await pool.query(
-      `SELECT 
-        c.*,
-        u.full_name as staff_name,
-        sp.staff_code,
-        sp.role_title
-       FROM staff_job_completions c
-       LEFT JOIN staff_profiles sp ON c.staff_id = sp.id
-       LEFT JOIN users u ON sp.user_id = u.id
-       WHERE c.work_order_id = ?`,
-      [id]
-    );
-
-    // Fetch proof photos from staff_completion_media
+    // Fetch report, proof photos, and material costs in parallel
     let mediaQuery = 'SELECT id, file_name, file_path, file_size_bytes, mime_type, created_at, media_type FROM staff_completion_media WHERE work_order_id = ?';
     if (req.user.role === 'OFFICE_TEAM') {
       mediaQuery += " AND media_type != 'RECEIPT'"; // Hide financial receipts from OFFICE_TEAM
     }
-    const [mediaRows] = await pool.query(mediaQuery, [id]);
 
-    // Fetch material costs from job_material_costs
-    const [materialsRows] = await pool.query(
-      'SELECT id, inventory_item_id, material_name, quantity, unit_cost, total_cost, receipt_path FROM job_material_costs WHERE work_order_id = ?',
-      [id]
-    );
+    const [[reports], [mediaRows], [materialsRows]] = await Promise.all([
+      pool.query(
+        `SELECT 
+          c.*,
+          u.full_name as staff_name,
+          sp.staff_code,
+          sp.role_title
+         FROM staff_job_completions c
+         LEFT JOIN staff_profiles sp ON c.staff_id = sp.id
+         LEFT JOIN users u ON sp.user_id = u.id
+         WHERE c.work_order_id = ?`,
+        [id]
+      ),
+      pool.query(mediaQuery, [id]),
+      pool.query(
+        'SELECT id, inventory_item_id, material_name, quantity, unit_cost, total_cost, receipt_path FROM job_material_costs WHERE work_order_id = ?',
+        [id]
+      )
+    ]);
 
     const materials = materialsRows.map(m => {
       const mat = {

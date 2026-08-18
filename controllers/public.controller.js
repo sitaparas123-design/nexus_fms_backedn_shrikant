@@ -10,14 +10,27 @@ const getPublicRequestByToken = async (req, res, next) => {
   try {
     const { token } = req.params;
 
-    // 1. Check quote_requests table
-    const [quoteRows] = await pool.query(
-      `SELECT q.*, w.job_number, w.title, w.resident_name, w.property_address, w.description as job_desc
-       FROM quote_requests q
-       JOIN work_orders w ON q.work_order_id = w.id
-       WHERE q.secure_token = ?`,
-      [token]
-    );
+    // Parallel lookup across quote_requests, booking_requests, and work_orders
+    const [[quoteRows], [bookingRows], [jobRows]] = await Promise.all([
+      pool.query(
+        `SELECT q.*, w.job_number, w.title, w.resident_name, w.property_address, w.description as job_desc
+         FROM quote_requests q
+         JOIN work_orders w ON q.work_order_id = w.id
+         WHERE q.secure_token = ?`,
+        [token]
+      ),
+      pool.query(
+        `SELECT b.*, w.job_number, w.title, w.resident_name, w.property_address, w.description as job_desc, w.duration_hours
+         FROM booking_requests b
+         JOIN work_orders w ON b.work_order_id = w.id
+         WHERE b.secure_token = ?`,
+        [token]
+      ),
+      pool.query(
+        `SELECT w.* FROM work_orders w WHERE w.secure_token = ?`,
+        [token]
+      )
+    ]);
 
     if (quoteRows.length > 0) {
       const q = quoteRows[0];
@@ -38,15 +51,6 @@ const getPublicRequestByToken = async (req, res, next) => {
         },
       });
     }
-
-    // 2. Check booking_requests table
-    const [bookingRows] = await pool.query(
-      `SELECT b.*, w.job_number, w.title, w.resident_name, w.property_address, w.description as job_desc, w.duration_hours
-       FROM booking_requests b
-       JOIN work_orders w ON b.work_order_id = w.id
-       WHERE b.secure_token = ?`,
-      [token]
-    );
 
     if (bookingRows.length > 0) {
       const b = bookingRows[0];
@@ -71,12 +75,6 @@ const getPublicRequestByToken = async (req, res, next) => {
       });
     }
 
-    // 3. Fallback check work_orders table
-    const [jobRows] = await pool.query(
-      `SELECT w.* FROM work_orders w WHERE w.secure_token = ?`,
-      [token]
-    );
-
     if (jobRows.length > 0) {
       const j = jobRows[0];
       return res.status(200).json({
@@ -89,7 +87,10 @@ const getPublicRequestByToken = async (req, res, next) => {
           residentName: j.resident_name,
           address: j.property_address,
           description: j.description,
-          stage: j.pipeline_stage,
+          durationHours: parseFloat(j.duration_hours || 1.5),
+          scheduledDate: j.scheduled_date,
+          scheduledTimeSlot: j.scheduled_time_slot,
+          status: j.pipeline_stage,
           secureToken: j.secure_token,
         },
       });

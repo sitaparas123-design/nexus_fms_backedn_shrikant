@@ -5,8 +5,27 @@ const QuoteRequestService = require('../services/quoteRequest.service');
 const BookingRequestService = require('../services/bookingRequest.service');
 
 
+// Helper to format any date input to strict YYYY-MM-DD
+const formatDateToISO = (d) => {
+  if (!d) return null;
+  if (typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d)) return d;
+  const dateObj = new Date(d);
+  if (isNaN(dateObj.getTime())) {
+    const match = String(d).match(/(\d{4})-(\d{2})-(\d{2})/);
+    return match ? match[0] : null;
+  }
+  const y = dateObj.getFullYear();
+  const m = String(dateObj.getMonth() + 1).padStart(2, '0');
+  const day = String(dateObj.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+};
+
 // Helper to format raw database row to Frontend job object
 const formatJobRow = (r, role) => {
+  const assignedStaffIds = r.assigned_staff_ids 
+    ? (typeof r.assigned_staff_ids === 'string' ? JSON.parse(r.assigned_staff_ids) : r.assigned_staff_ids) 
+    : (r.assigned_staff_id ? [r.assigned_staff_id] : []);
+
   const job = {
     id: r.id,
     jobNumber: r.job_number,
@@ -20,7 +39,8 @@ const formatJobRow = (r, role) => {
     description: r.description || '',
     durationHours: parseFloat(r.duration_hours || 1.5),
     assignedStaffId: r.assigned_staff_id || null,
-    assignedStaffIds: r.assigned_staff_ids ? (typeof r.assigned_staff_ids === 'string' ? JSON.parse(r.assigned_staff_ids) : r.assigned_staff_ids) : [],
+    assignedStaffIds: assignedStaffIds,
+    assignedStaffNames: r.assigned_staff_names ? (typeof r.assigned_staff_names === 'string' ? JSON.parse(r.assigned_staff_names) : r.assigned_staff_names) : (r.staff_name ? [r.staff_name] : []),
     priority: r.priority || 'NORMAL',
     latitude: r.latitude || null,
     longitude: r.longitude || null,
@@ -29,10 +49,10 @@ const formatJobRow = (r, role) => {
     assignedStaffColor: r.staff_color || '#009bf2',
     managerName: r.manager_name || null,
     quoteAmount: r.quote_amount ? parseFloat(r.quote_amount) : null,
-    scheduledDate: r.scheduled_date ? String(r.scheduled_date).substring(0, 10) : null,
+    scheduledDate: formatDateToISO(r.scheduled_date),
     scheduledTimeSlot: r.scheduled_time_slot || null,
     secureToken: r.secure_token,
-    createdAt: r.created_at ? String(r.created_at).substring(0, 10) : null,
+    createdAt: formatDateToISO(r.created_at),
     bookingStatus: r.booking_status || null,
     
     // Cancellation Properties
@@ -41,7 +61,7 @@ const formatJobRow = (r, role) => {
     cancelledBy: r.cancelled_by || null,
     cancellerName: r.canceller_name || null,
     cancelledAt: r.cancelled_at || null,
-    previousAppointmentDate: r.previous_appointment_date ? String(r.previous_appointment_date).substring(0, 10) : null,
+    previousAppointmentDate: formatDateToISO(r.previous_appointment_date),
     previousAppointmentTime: r.previous_appointment_time || null,
   };
 
@@ -138,7 +158,55 @@ const getJobs = async (req, res, next) => {
     sql += ' ORDER BY w.created_at DESC';
 
     const [rows] = await pool.query(sql, queryParams);
-    const jobs = rows.map(r => formatJobRow(r, req.user ? req.user.role : null));
+
+    const jobIds = rows.map(r => r.id);
+    let mediaByJob = {};
+    let reportByJob = {};
+    if (jobIds.length > 0) {
+      try {
+        const [[mediaRows], [reportRows]] = await Promise.all([
+          pool.query(
+            'SELECT id, work_order_id, file_name, file_path, file_size_bytes, mime_type, media_type, created_at FROM staff_completion_media WHERE work_order_id IN (?)',
+            [jobIds]
+          ),
+          pool.query(
+            'SELECT id, work_order_id, staff_id, work_report_summary, materials_used, completion_status, completed_at FROM staff_job_completions WHERE work_order_id IN (?)',
+            [jobIds]
+          )
+        ]);
+        mediaRows.forEach(m => {
+          if (!mediaByJob[m.work_order_id]) mediaByJob[m.work_order_id] = [];
+          mediaByJob[m.work_order_id].push({
+            id: m.id,
+            fileName: m.file_name,
+            filePath: m.file_path,
+            fileSize: m.file_size_bytes,
+            mimeType: m.mime_type,
+            mediaType: m.media_type,
+            uploadedAt: m.created_at,
+          });
+        });
+
+        reportRows.forEach(r => {
+          reportByJob[r.work_order_id] = {
+            id: r.id,
+            workReportSummary: r.work_report_summary,
+            materialsUsed: r.materials_used,
+            completionStatus: r.completion_status,
+            completedAt: r.completed_at,
+          };
+        });
+      } catch (err) {
+        console.warn('[job.controller] Error fetching completion media:', err.message);
+      }
+    }
+
+    const jobs = rows.map(r => {
+      const formatted = formatJobRow(r, req.user ? req.user.role : null);
+      formatted.completionPhotos = mediaByJob[r.id] || [];
+      formatted.completionReport = reportByJob[r.id] || null;
+      return formatted;
+    });
 
     res.status(200).json({
       success: true,
@@ -195,9 +263,50 @@ const getJobById = async (req, res, next) => {
       }
     }
 
+    let completionPhotos = [];
+    let completionReport = null;
+    try {
+      const [[mediaRows], [reportRows]] = await Promise.all([
+        pool.query(
+          'SELECT id, work_order_id, file_name, file_path, file_size_bytes, mime_type, media_type, created_at FROM staff_completion_media WHERE work_order_id = ?',
+          [rows[0].id]
+        ),
+        pool.query(
+          'SELECT id, work_order_id, staff_id, work_report_summary, materials_used, completion_status, completed_at FROM staff_job_completions WHERE work_order_id = ?',
+          [rows[0].id]
+        )
+      ]);
+
+      completionPhotos = mediaRows.map(m => ({
+        id: m.id,
+        fileName: m.file_name,
+        filePath: m.file_path,
+        fileSize: m.file_size_bytes,
+        mimeType: m.mime_type,
+        mediaType: m.media_type,
+        uploadedAt: m.created_at,
+      }));
+
+      if (reportRows.length > 0) {
+        completionReport = {
+          id: reportRows[0].id,
+          workReportSummary: reportRows[0].work_report_summary,
+          materialsUsed: reportRows[0].materials_used,
+          completionStatus: reportRows[0].completion_status,
+          completedAt: reportRows[0].completed_at,
+        };
+      }
+    } catch (e) {
+      console.warn('[job.controller] Error fetching completion media for single job:', e.message);
+    }
+
+    const formatted = formatJobRow(rows[0], req.user ? req.user.role : null);
+    formatted.completionPhotos = completionPhotos;
+    formatted.completionReport = completionReport;
+
     res.status(200).json({
       success: true,
-      data: formatJobRow(rows[0], req.user ? req.user.role : null),
+      data: formatted,
     });
   } catch (err) {
     next(err);
@@ -545,6 +654,10 @@ const updateJobStatus = async (req, res, next) => {
       quote_amount, quoteAmount,
       scheduled_date, scheduledDate,
       scheduled_time_slot, scheduledTimeSlot,
+      title, description, duration_hours, durationHours,
+      property_address, address, priority,
+      resident_id, residentId, resident_name, tenantName,
+      contact_phone, contactPhone, contact_email, contactEmail,
     } = req.body;
 
     const [existing] = await pool.query(
@@ -616,8 +729,8 @@ const updateJobStatus = async (req, res, next) => {
     }
 
     const newStage = pipeline_stage || section;
-    const schedDate = scheduled_date || scheduledDate;
-    const schedSlot = scheduled_time_slot || scheduledTimeSlot;
+    const schedDate = scheduled_date !== undefined ? scheduled_date : scheduledDate;
+    const schedSlot = scheduled_time_slot !== undefined ? scheduled_time_slot : scheduledTimeSlot;
 
     const updates = [];
     const values = [];
@@ -645,6 +758,48 @@ const updateJobStatus = async (req, res, next) => {
     if (schedSlot !== undefined) {
       updates.push('scheduled_time_slot = ?');
       values.push(schedSlot);
+    }
+    if (title !== undefined) {
+      updates.push('title = ?');
+      values.push(title);
+    }
+    if (description !== undefined) {
+      updates.push('description = ?');
+      values.push(description);
+    }
+    const durVal = duration_hours !== undefined ? duration_hours : durationHours;
+    if (durVal !== undefined) {
+      updates.push('duration_hours = ?');
+      values.push(parseFloat(durVal) || 1.5);
+    }
+    const addrVal = property_address !== undefined ? property_address : address;
+    if (addrVal !== undefined) {
+      updates.push('property_address = ?');
+      values.push(addrVal);
+    }
+    if (priority !== undefined) {
+      updates.push('priority = ?');
+      values.push(priority);
+    }
+    const resIdVal = resident_id !== undefined ? resident_id : residentId;
+    if (resIdVal !== undefined) {
+      updates.push('resident_id = ?');
+      values.push(resIdVal);
+    }
+    const resNameVal = resident_name !== undefined ? resident_name : tenantName;
+    if (resNameVal !== undefined) {
+      updates.push('resident_name = ?');
+      values.push(resNameVal);
+    }
+    const phoneVal = contact_phone !== undefined ? contact_phone : contactPhone;
+    if (phoneVal !== undefined) {
+      updates.push('contact_phone = ?');
+      values.push(phoneVal);
+    }
+    const emailVal = contact_email !== undefined ? contact_email : contactEmail;
+    if (emailVal !== undefined) {
+      updates.push('contact_email = ?');
+      values.push(emailVal);
     }
 
     if (updates.length > 0) {

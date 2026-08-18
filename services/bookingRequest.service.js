@@ -25,7 +25,7 @@ const triggerAutoBookingRequest = async (workOrderId) => {
       `INSERT INTO booking_requests (work_order_id, secure_token, status, expires_at, booked_date, booked_time_slot, booked_at)
        VALUES (?, ?, 'WAITING_FOR_BOOKING', ?, NULL, NULL, NULL)
        ON DUPLICATE KEY UPDATE 
-         secure_token = VALUES(secure_token),
+         secure_token = COALESCE(booking_requests.secure_token, VALUES(secure_token)),
          status = 'WAITING_FOR_BOOKING',
          expires_at = VALUES(expires_at),
          booked_date = NULL,

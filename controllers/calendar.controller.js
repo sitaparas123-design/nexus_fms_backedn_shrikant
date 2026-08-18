@@ -8,8 +8,37 @@ const getStaffProfileId = async (userId) => {
   return rows.length > 0 ? rows[0].id : null;
 };
 
+// Helper to format any date input to strict YYYY-MM-DD
+const formatDateToISO = (d) => {
+  if (!d) return null;
+  if (typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d)) return d;
+  const dateObj = new Date(d);
+  if (isNaN(dateObj.getTime())) {
+    const match = String(d).match(/(\d{4})-(\d{2})-(\d{2})/);
+    return match ? match[0] : null;
+  }
+  const y = dateObj.getFullYear();
+  const m = String(dateObj.getMonth() + 1).padStart(2, '0');
+  const day = String(dateObj.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+};
+
 // Helper to format raw database row to Frontend job object
 const formatJobRow = (r, role) => {
+  let parsedStaffIds = [];
+  if (r.assigned_staff_ids) {
+    try {
+      parsedStaffIds = typeof r.assigned_staff_ids === 'string'
+        ? JSON.parse(r.assigned_staff_ids)
+        : r.assigned_staff_ids;
+    } catch {
+      parsedStaffIds = [];
+    }
+  }
+  if (parsedStaffIds.length === 0 && r.assigned_staff_id) {
+    parsedStaffIds = [r.assigned_staff_id];
+  }
+
   const job = {
     id: r.id,
     jobNumber: r.job_number,
@@ -23,14 +52,16 @@ const formatJobRow = (r, role) => {
     description: r.description || '',
     durationHours: parseFloat(r.duration_hours || 1.5),
     assignedStaffId: r.assigned_staff_id || null,
+    assignedStaffIds: parsedStaffIds,
     assignedStaffCode: r.staff_code || (r.assigned_staff_id ? `STF-${100 + r.assigned_staff_id}` : null),
     assignedStaffName: r.staff_name || null,
     assignedStaffColor: r.staff_color || '#009bf2',
     quoteAmount: r.quote_amount ? parseFloat(r.quote_amount) : null,
-    scheduledDate: r.scheduled_date ? String(r.scheduled_date).substring(0, 10) : null,
+    scheduledDate: formatDateToISO(r.scheduled_date),
     scheduledTimeSlot: r.scheduled_time_slot || null,
+    priority: r.priority || 'NORMAL',
     secureToken: r.secure_token,
-    createdAt: r.created_at ? String(r.created_at).substring(0, 10) : null,
+    createdAt: formatDateToISO(r.created_at),
   };
 
   if (role === 'OFFICE_TEAM' || role === 'MAINTENANCE_STAFF') {
@@ -47,44 +78,7 @@ const getCalendar = async (req, res, next) => {
     const { start, end, staffId } = req.query;
     const staffProfileId = await getStaffProfileId(req.user.id);
 
-    // 1. Fetch Dynamic Staff List from MySQL (No hardcoding)
-    const [staffRows] = await pool.query(
-      `SELECT 
-        sp.id as profile_id,
-        sp.staff_code,
-        sp.role_title,
-        sp.color_hex,
-        sp.working_days_json,
-        sp.work_start_time,
-        sp.work_end_time,
-        sp.break_start_time,
-        sp.break_end_time,
-        u.full_name as name,
-        u.email
-       FROM staff_profiles sp
-       JOIN users u ON sp.user_id = u.id
-       ORDER BY sp.created_at ASC`
-    );
-
-    const staffList = staffRows.map(s => ({
-      id: s.profile_id,
-      staffCode: s.staff_code,
-      name: s.name,
-      email: s.email,
-      role: s.role_title,
-      color: s.color_hex,
-      workingDays: s.working_days_json || ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'],
-      workingHours: {
-        start: s.work_start_time ? String(s.work_start_time).substring(0, 5) : '08:00',
-        end: s.work_end_time ? String(s.work_end_time).substring(0, 5) : '17:00',
-      },
-      breakTime: {
-        start: s.break_start_time ? String(s.break_start_time).substring(0, 5) : '12:00',
-        end: s.break_end_time ? String(s.break_end_time).substring(0, 5) : '13:00',
-      },
-    }));
-
-    // 2. Strict Authorization Check for Maintenance Staff
+    // 1. Strict Authorization Check for Maintenance Staff
     if (req.user.role === 'MAINTENANCE_STAFF') {
       if (staffId) {
         const cleanRequestedStaffId = parseInt(String(staffId).replace(/^(stf-|usr-)/, ''), 10);
@@ -97,7 +91,7 @@ const getCalendar = async (req, res, next) => {
       }
     }
 
-    // 3. Build Work Orders Query
+    // 2. Build Work Orders Query
     let sql = `
       SELECT 
         w.*,
@@ -139,7 +133,57 @@ const getCalendar = async (req, res, next) => {
 
     sql += ' ORDER BY w.scheduled_date ASC, w.scheduled_time_slot ASC';
 
-    const [jobRows] = await pool.query(sql, queryParams);
+    // 3. Parallel Query Execution for Staff and Jobs
+    const [[staffRows], [jobRows]] = await Promise.all([
+      pool.query(`
+        SELECT 
+          COALESCE(sp.id, u.id) as profile_id,
+          COALESCE(sp.staff_code, CONCAT('STF-', 100 + u.id)) as staff_code,
+          COALESCE(sp.role_title, 'Maintenance Technician') as role_title,
+          COALESCE(sp.color_hex, '#009bf2') as color_hex,
+          sp.working_days_json,
+          sp.work_start_time,
+          sp.work_end_time,
+          sp.break_start_time,
+          sp.break_end_time,
+          u.full_name as name,
+          u.email
+        FROM users u
+        LEFT JOIN staff_profiles sp ON u.id = sp.user_id
+        WHERE u.role = 'MAINTENANCE_STAFF' OR sp.id IS NOT NULL
+        ORDER BY sp.created_at ASC
+      `),
+      pool.query(sql, queryParams)
+    ]);
+
+    const staffList = staffRows.map(s => {
+      let days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
+      if (s.working_days_json) {
+        try {
+          days = typeof s.working_days_json === 'string' ? JSON.parse(s.working_days_json) : s.working_days_json;
+        } catch {
+          days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
+        }
+      }
+      return {
+        id: s.profile_id,
+        staffCode: s.staff_code,
+        name: s.name,
+        email: s.email,
+        role: s.role_title,
+        color: s.color_hex,
+        workingDays: Array.isArray(days) ? days : ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'],
+        workingHours: {
+          start: s.work_start_time ? String(s.work_start_time).substring(0, 5) : '08:00',
+          end: s.work_end_time ? String(s.work_end_time).substring(0, 5) : '17:00',
+        },
+        breakTime: {
+          start: s.break_start_time ? String(s.break_start_time).substring(0, 5) : '12:00',
+          end: s.break_end_time ? String(s.break_end_time).substring(0, 5) : '13:00',
+        },
+      };
+    });
+
     const calendarJobs = jobRows.map(r => formatJobRow(r, req.user ? req.user.role : null));
 
     res.status(200).json({
