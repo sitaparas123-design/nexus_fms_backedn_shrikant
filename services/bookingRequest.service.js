@@ -20,28 +20,21 @@ const triggerAutoBookingRequest = async (workOrderId) => {
     const token = crypto.randomBytes(32).toString('hex');
     const expiresAt = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000); // 14 days expiry
 
-    // 4. Create booking request idempotently
-    try {
-      await pool.query(
-        `INSERT IGNORE INTO booking_requests (work_order_id, secure_token, status, expires_at)
-         VALUES (?, ?, 'WAITING_FOR_BOOKING', ?)`,
-        [workOrderId, token, expiresAt]
-      );
-    } catch (dbErr) {
-       // Ignore duplicate entry errors just in case
-       if (dbErr.code !== 'ER_DUP_ENTRY') throw dbErr;
-    }
-
-    // Check if it was inserted or if it already existed
-    const [existingBr] = await pool.query(
-      'SELECT secure_token FROM booking_requests WHERE work_order_id = ? AND secure_token = ? LIMIT 1',
-      [workOrderId, token]
+    // 4. Create or reset booking request with fresh secure token
+    await pool.query(
+      `INSERT INTO booking_requests (work_order_id, secure_token, status, expires_at, booked_date, booked_time_slot, booked_at)
+       VALUES (?, ?, 'WAITING_FOR_BOOKING', ?, NULL, NULL, NULL)
+       ON DUPLICATE KEY UPDATE 
+         secure_token = VALUES(secure_token),
+         status = 'WAITING_FOR_BOOKING',
+         expires_at = VALUES(expires_at),
+         booked_date = NULL,
+         booked_time_slot = NULL,
+         booked_at = NULL,
+         reminder_count = 0,
+         last_reminder_at = NULL`,
+      [workOrderId, token, expiresAt]
     );
-
-    if (existingBr.length === 0) {
-      // It already existed with a different token, meaning another request generated it.
-      return;
-    }
 
     // 5. Send Notification
     const publicAppUrl = process.env.VITE_PUBLIC_APP_URL || process.env.PUBLIC_APP_URL || 'http://localhost:5173';

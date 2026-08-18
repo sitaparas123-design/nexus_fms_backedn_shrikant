@@ -85,24 +85,27 @@ const notificationService = {
     let notificationId = null;
 
     try {
-      if (channels.includes('IN_APP') && recipientUserId) {
-        const [res] = await db.query(
-          `INSERT INTO notifications 
-            (user_id, notification_type, title, message, related_entity_type, related_entity_id, action_url)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`,
-          [recipientUserId, type, title, finalMessage, relatedEntityType, relatedEntityId, actionUrl]
-        );
-        notificationId = res.insertId;
+      if (channels.includes('IN_APP') && recipientUserId && recipientRole !== 'TENANT') {
+        const [userExists] = await db.query('SELECT id FROM users WHERE id = ?', [recipientUserId]);
+        if (userExists.length > 0) {
+          const [res] = await db.query(
+            `INSERT INTO notifications 
+              (user_id, notification_type, title, message, related_entity_type, related_entity_id, action_url)
+             VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            [recipientUserId, type, title, finalMessage, relatedEntityType, relatedEntityId, actionUrl]
+          );
+          notificationId = res.insertId;
 
-        if (ioInstance) {
-           ioInstance.to(`user_${recipientUserId}`).emit('NEW_NOTIFICATION', {
-             id: notificationId,
-             type,
-             title,
-             message: finalMessage,
-             actionUrl,
-             createdAt: new Date().toISOString()
-           });
+          if (ioInstance) {
+             ioInstance.to(`user_${recipientUserId}`).emit('NEW_NOTIFICATION', {
+               id: notificationId,
+               type,
+               title,
+               message: finalMessage,
+               actionUrl,
+               createdAt: new Date().toISOString()
+             });
+          }
         }
       }
 

@@ -113,7 +113,9 @@ const getJobs = async (req, res, next) => {
     }
 
     // Role-based data isolation
-    if (req.user && req.user.role === 'MAINTENANCE_STAFF') {
+    if (req.user && req.user.role === 'OFFICE_TEAM') {
+      sql += " AND w.pipeline_stage IN ('Jobs', 'Jobs Waiting Booking')";
+    } else if (req.user && req.user.role === 'MAINTENANCE_STAFF') {
       if (req.user.staffProfileId) {
         sql += ' AND (w.assigned_staff_id = ? OR (w.assigned_staff_ids IS NOT NULL AND JSON_CONTAINS(w.assigned_staff_ids, CAST(? AS JSON), "$")))';
         queryParams.push(req.user.staffProfileId, req.user.staffProfileId);
@@ -180,6 +182,17 @@ const getJobById = async (req, res, next) => {
         success: false,
         message: `Work order not found with identifier '${id}'`,
       });
+    }
+
+    // OFFICE_TEAM: can only access booking-relevant stages
+    if (req.user && req.user.role === 'OFFICE_TEAM') {
+      const allowedStages = ['Jobs', 'Jobs Waiting Booking'];
+      if (!allowedStages.includes(rows[0].pipeline_stage)) {
+        return res.status(403).json({
+          success: false,
+          message: 'Forbidden. Office Team can only access booking-stage jobs.',
+        });
+      }
     }
 
     res.status(200).json({
@@ -535,7 +548,7 @@ const updateJobStatus = async (req, res, next) => {
     } = req.body;
 
     const [existing] = await pool.query(
-      'SELECT id, title, property_address, pipeline_stage, assigned_staff_id, scheduled_date, scheduled_time_slot FROM work_orders WHERE id = ?',
+      'SELECT id, title, property_address, pipeline_stage, assigned_staff_id, assigned_staff_ids, scheduled_date, scheduled_time_slot FROM work_orders WHERE id = ?',
       [id]
     );
     if (existing.length === 0) {
@@ -575,7 +588,18 @@ const updateJobStatus = async (req, res, next) => {
       const [userStaffProfile] = await pool.query('SELECT id FROM staff_profiles WHERE user_id = ?', [req.user.id]);
       const currentStaffProfileId = userStaffProfile.length > 0 ? userStaffProfile[0].id : null;
 
-      if (!currentStaffProfileId || existing[0].assigned_staff_id !== currentStaffProfileId) {
+      // Check both primary assigned_staff_id and the multi-select assigned_staff_ids JSON array
+      let isOwner = (existing[0].assigned_staff_id === currentStaffProfileId);
+      if (!isOwner && existing[0].assigned_staff_ids) {
+        const multiIds = typeof existing[0].assigned_staff_ids === 'string'
+          ? JSON.parse(existing[0].assigned_staff_ids)
+          : existing[0].assigned_staff_ids;
+        if (Array.isArray(multiIds) && multiIds.includes(currentStaffProfileId)) {
+          isOwner = true;
+        }
+      }
+
+      if (!currentStaffProfileId || !isOwner) {
         return res.status(403).json({
           success: false,
           message: 'Forbidden. Maintenance Staff can only update work orders assigned to them.',
@@ -773,11 +797,34 @@ const cancelJob = async (req, res, next) => {
   try {
     const { id } = req.params;
     const { cancellationType, reason, notes } = req.body;
+    const hasProof = !!req.file;
+    const hasReason = !!(reason && reason.trim());
 
-    if (!cancellationType || !reason) {
+    // Type-specific validation — do NOT use a generic proof-replaces-reason rule
+    if (cancellationType === 'TENANT_CANCELLED') {
+      // Tenant: proof OR reason required
+      if (!hasProof && !hasReason) {
+        connection.release();
+        return res.status(400).json({
+          success: false,
+          message: 'Tenant cancellation requires either a proof screenshot or a written reason.',
+        });
+      }
+    } else if (cancellationType === 'TECHNICIAN_CANCELLED') {
+      // Technician: reason is ALWAYS mandatory regardless of proof
+      if (!hasReason) {
+        connection.release();
+        return res.status(400).json({
+          success: false,
+          message: 'Technician cancellation requires a written reason. Proof alone is not sufficient.',
+        });
+      }
+    } else {
+      // Unsupported cancellation type
+      connection.release();
       return res.status(400).json({
         success: false,
-        message: 'Cancellation type and reason are required.',
+        message: `Unsupported cancellation type: '${cancellationType}'. Use TENANT_CANCELLED or TECHNICIAN_CANCELLED.`,
       });
     }
 
@@ -869,7 +916,7 @@ const cancelJob = async (req, res, next) => {
       [cancellationType, reason, req.user.id, newStage, priority, id]
     );
 
-    // 4. Create Appointment History Record
+    // 4. Create Appointment & Cancellation History Records
     const [historyResult] = await connection.query(
       `INSERT INTO appointment_history (
         work_order_id, action_type, previous_date, previous_time,
@@ -881,12 +928,15 @@ const cancelJob = async (req, res, next) => {
       ]
     );
 
+    let proofPath = req.file ? (req.file.path || req.file.filename) : null;
+    await connection.query(
+      `INSERT INTO cancellation_history (
+        work_order_id, cancelled_by_user_id, cancellation_type, reason, notes, proof_url
+      ) VALUES (?, ?, ?, ?, ?, ?)`,
+      [id, req.user.id, cancellationType, reason || 'No reason specified', notes || null, proofPath]
+    );
+
     // 5. Handle File Upload if Tenant Cancelled
-    if (req.files && req.files.proof) {
-      const file = req.files.proof;
-      // We assume it's handled properly if setup via Multer.
-    }
-    
     if (req.file) {
        await connection.query(
         `INSERT INTO cancellation_media_uploads (

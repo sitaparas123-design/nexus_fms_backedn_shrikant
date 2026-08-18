@@ -538,6 +538,27 @@ const getJobCompletionEvidence = async (req, res, next) => {
     }
     const [mediaRows] = await pool.query(mediaQuery, [id]);
 
+    // Fetch material costs from job_material_costs
+    const [materialsRows] = await pool.query(
+      'SELECT id, inventory_item_id, material_name, quantity, unit_cost, total_cost, receipt_path FROM job_material_costs WHERE work_order_id = ?',
+      [id]
+    );
+
+    const materials = materialsRows.map(m => {
+      const mat = {
+        id: m.id,
+        inventoryItemId: m.inventory_item_id,
+        materialName: m.material_name,
+        quantity: parseFloat(m.quantity),
+      };
+      if (req.user.role !== 'OFFICE_TEAM') {
+        mat.unitCost = parseFloat(m.unit_cost);
+        mat.totalCost = parseFloat(m.total_cost);
+        mat.receiptPath = m.receipt_path;
+      }
+      return mat;
+    });
+
     res.status(200).json({
       success: true,
       data: {
@@ -561,8 +582,10 @@ const getJobCompletionEvidence = async (req, res, next) => {
           filePath: m.file_path,
           fileSize: m.file_size_bytes,
           mimeType: m.mime_type,
+          mediaType: m.media_type,
           uploadedAt: m.created_at,
         })),
+        materials,
       },
     });
   } catch (err) {
@@ -610,6 +633,14 @@ const completeJobAtomic = async (req, res, next) => {
         connection.release();
         return res.status(400).json({ success: false, message: `Invalid materials JSON: ${err.message}` });
       }
+    }
+
+    // Enforce mandatory after-photo upload
+    const afterPhotoFiles = req.files && req.files['afterPhotos'] ? req.files['afterPhotos'] : [];
+    if (afterPhotoFiles.length === 0) {
+      if (req.files) Object.values(req.files).flat().forEach(f => require('fs').unlink(f.path, () => {}));
+      connection.release();
+      return res.status(400).json({ success: false, message: 'Validation Error: At least one after-photo is required to complete the job.' });
     }
 
     await connection.beginTransaction();
@@ -670,16 +701,42 @@ const completeJobAtomic = async (req, res, next) => {
       }
     }
 
-    // Insert Materials
+    // Insert Materials + deduct linked inventory stock
     if (parsedMaterials.length > 0) {
       for (const m of parsedMaterials) {
         const qty = Number(m.quantity);
         const uCost = Number(m.unit_cost);
         const tCost = qty * uCost;
-        await connection.query(
-          "INSERT INTO job_material_costs (work_order_id, technician_id, material_name, quantity, unit_cost, total_cost) VALUES (?, ?, ?, ?, ?, ?)",
-          [id, staffProfileId, m.material_name, qty, uCost, tCost]
+        const invItemId = m.inventory_item_id ? Number(m.inventory_item_id) : null;
+
+        const [materialInsert] = await connection.query(
+          'INSERT INTO job_material_costs (work_order_id, technician_id, material_name, quantity, unit_cost, total_cost, inventory_item_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
+          [id, staffProfileId, m.material_name, qty, uCost, tCost, invItemId]
         );
+
+        // Deduct inventory if linked to a warehouse item
+        if (invItemId) {
+          const [invRows] = await connection.query(
+            'SELECT id, item_name, current_quantity FROM inventory_items WHERE id = ? AND status = ? FOR UPDATE',
+            [invItemId, 'ACTIVE']
+          );
+          if (invRows.length === 0) {
+            throw { status: 400, message: `Inventory item #${invItemId} not found or inactive.` };
+          }
+          const prevQty = invRows[0].current_quantity;
+          const newQty = prevQty - qty;
+          if (newQty < 0) {
+            throw {
+              status: 400,
+              message: `Insufficient inventory for "${invRows[0].item_name}". Available: ${prevQty}, Requested: ${qty}`
+            };
+          }
+          await connection.query('UPDATE inventory_items SET current_quantity = ? WHERE id = ?', [newQty, invItemId]);
+          await connection.query(
+            'INSERT INTO inventory_transactions (inventory_item_id, user_id, transaction_type, quantity_change, previous_quantity, new_quantity, notes) VALUES (?, ?, ?, ?, ?, ?, ?)',
+            [invItemId, req.user.id, 'CONSUMED', -qty, prevQty, newQty, `Job #${id} completion — ${m.material_name}`]
+          );
+        }
       }
     }
 
@@ -737,4 +794,218 @@ module.exports = {
   markJobComplete,
   getJobCompletionEvidence,
   completeJobAtomic,
+  updateCompletedJobEvidence,
+  getStaffInventoryItems,
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// INTERNAL: helper to reconcile material delta and adjust warehouse stock
+// ─────────────────────────────────────────────────────────────────────────────
+async function _reconcileInventoryDelta(connection, userId, jobId, oldMaterials, newMaterials) {
+  // Build maps keyed by job_material_costs.id for old materials
+  const oldMap = {};
+  for (const om of oldMaterials) {
+    oldMap[om.id] = om;
+  }
+
+  const newByExistingId = {}; // existing records being updated (has id)
+  const brandNew = [];       // new rows without an id
+  for (const nm of newMaterials) {
+    if (nm.id) {
+      newByExistingId[nm.id] = nm;
+    } else {
+      brandNew.push(nm);
+    }
+  }
+
+  // Process removed materials (in old but not in new)
+  for (const om of oldMaterials) {
+    if (!newByExistingId[om.id] && om.inventory_item_id) {
+      // Restore removed quantity
+      const [invRows] = await connection.query('SELECT current_quantity FROM inventory_items WHERE id = ? FOR UPDATE', [om.inventory_item_id]);
+      if (invRows.length > 0) {
+        const prevQty = invRows[0].current_quantity;
+        const newQty = prevQty + Number(om.quantity);
+        await connection.query('UPDATE inventory_items SET current_quantity = ? WHERE id = ?', [newQty, om.inventory_item_id]);
+        await connection.query(
+          'INSERT INTO inventory_transactions (inventory_item_id, user_id, transaction_type, quantity_change, previous_quantity, new_quantity, notes) VALUES (?, ?, ?, ?, ?, ?, ?)',
+          [om.inventory_item_id, userId, 'RESTOCK', Number(om.quantity), prevQty, newQty, `Job #${jobId} edit — material removed`]
+        );
+      }
+      await connection.query('DELETE FROM job_material_costs WHERE id = ?', [om.id]);
+    }
+  }
+
+  // Process updated materials (in both old and new)
+  for (const [existingId, nm] of Object.entries(newByExistingId)) {
+    const om = oldMap[existingId];
+    const newQty = Number(nm.quantity);
+    const newUCost = Number(nm.unit_cost);
+    await connection.query(
+      'UPDATE job_material_costs SET material_name = ?, quantity = ?, unit_cost = ?, total_cost = ? WHERE id = ?',
+      [nm.material_name, newQty, newUCost, newQty * newUCost, existingId]
+    );
+    // Inventory delta — only if old row has a valid inventory_item_id
+    if (om && om.inventory_item_id) {
+      const delta = newQty - Number(om.quantity);
+      if (delta !== 0) {
+        const [invRows] = await connection.query('SELECT id, item_name, current_quantity FROM inventory_items WHERE id = ? FOR UPDATE', [om.inventory_item_id]);
+        if (invRows.length > 0) {
+          const prevStock = invRows[0].current_quantity;
+          const newStock = prevStock - delta; // negative delta = restock, positive = consume more
+          if (newStock < 0) {
+            throw {
+              status: 400,
+              message: `Insufficient inventory for "${invRows[0].item_name}". Available: ${prevStock}, Additional Requested: ${delta}`
+            };
+          }
+          await connection.query('UPDATE inventory_items SET current_quantity = ? WHERE id = ?', [newStock, om.inventory_item_id]);
+          const txType = delta > 0 ? 'CONSUMED' : 'RESTOCK';
+          await connection.query(
+            'INSERT INTO inventory_transactions (inventory_item_id, user_id, transaction_type, quantity_change, previous_quantity, new_quantity, notes) VALUES (?, ?, ?, ?, ?, ?, ?)',
+            [om.inventory_item_id, userId, txType, -delta, prevStock, newStock, `Job #${jobId} edit — quantity adjusted`]
+          );
+        }
+      }
+    }
+  }
+
+  // Process brand-new materials added during edit
+  for (const nm of brandNew) {
+    const qty = Number(nm.quantity);
+    const uCost = Number(nm.unit_cost);
+    const invItemId = nm.inventory_item_id ? Number(nm.inventory_item_id) : null;
+    await connection.query(
+      'INSERT INTO job_material_costs (work_order_id, technician_id, material_name, quantity, unit_cost, total_cost, inventory_item_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [jobId, userId, nm.material_name, qty, uCost, qty * uCost, invItemId]
+    );
+    if (invItemId) {
+      const [invRows] = await connection.query('SELECT id, item_name, current_quantity FROM inventory_items WHERE id = ? FOR UPDATE', [invItemId]);
+      if (invRows.length > 0) {
+        const prevStock = invRows[0].current_quantity;
+        const newStock = prevStock - qty;
+        if (newStock < 0) {
+          throw {
+            status: 400,
+            message: `Insufficient inventory for "${invRows[0].item_name}". Available: ${prevStock}, Requested: ${qty}`
+          };
+        }
+        await connection.query('UPDATE inventory_items SET current_quantity = ? WHERE id = ?', [newStock, invItemId]);
+        await connection.query(
+          'INSERT INTO inventory_transactions (inventory_item_id, user_id, transaction_type, quantity_change, previous_quantity, new_quantity, notes) VALUES (?, ?, ?, ?, ?, ?, ?)',
+          [invItemId, userId, 'CONSUMED', -qty, prevStock, newStock, `Job #${jobId} edit — material added`]
+        );
+      }
+    }
+  }
+}
+
+// @desc    Update completion evidence for an already-completed job (technician only)
+// @route   PUT /api/v1/staff/jobs/:id/completion-evidence
+// @access  Private (Maintenance Staff — own jobs only)
+async function updateCompletedJobEvidence(req, res, next) {
+  const connection = await pool.getConnection();
+  const fs = require('fs');
+  try {
+    const { id } = req.params;
+    const staffProfileId = await getStaffProfileId(req.user.id);
+    const { completion_report, materials } = req.body;
+
+    if (req.user.role !== 'MAINTENANCE_STAFF') {
+      connection.release();
+      return res.status(403).json({ success: false, message: 'Forbidden. Only Maintenance Staff can edit completion evidence.' });
+    }
+
+    let parsedMaterials = [];
+    if (materials) {
+      try {
+        parsedMaterials = JSON.parse(materials);
+        if (!Array.isArray(parsedMaterials)) throw new Error('Materials must be an array');
+        for (const m of parsedMaterials) {
+          if (!m.material_name || m.material_name.trim() === '') throw new Error('Material name required');
+          if (isNaN(m.quantity) || Number(m.quantity) <= 0) throw new Error('Quantity must be > 0');
+          if (isNaN(m.unit_cost) || Number(m.unit_cost) < 0) throw new Error('Unit cost must be >= 0');
+        }
+      } catch (err) {
+        connection.release();
+        return res.status(400).json({ success: false, message: `Invalid materials: ${err.message}` });
+      }
+    }
+
+    await connection.beginTransaction();
+
+    // Verify job is completed and belongs to this technician
+    const [jobRows] = await connection.query(
+      'SELECT id, assigned_staff_id, assigned_staff_ids, pipeline_stage FROM work_orders WHERE id = ? FOR UPDATE',
+      [id]
+    );
+    if (jobRows.length === 0) throw { status: 404, message: 'Job not found.' };
+    const job = jobRows[0];
+    if (job.pipeline_stage !== 'Completed Jobs') throw { status: 400, message: 'Job is not in Completed state.' };
+
+    let isOwner = (job.assigned_staff_id === staffProfileId);
+    if (!isOwner && job.assigned_staff_ids) {
+      const ids = typeof job.assigned_staff_ids === 'string' ? JSON.parse(job.assigned_staff_ids) : job.assigned_staff_ids;
+      if (Array.isArray(ids) && ids.includes(staffProfileId)) isOwner = true;
+    }
+    if (!isOwner) throw { status: 403, message: 'Forbidden. You can only edit your own completed job.' };
+
+    // Update completion report if provided
+    if (completion_report && completion_report.trim()) {
+      await connection.query(
+        'UPDATE staff_job_completions SET work_report_summary = ? WHERE work_order_id = ?',
+        [completion_report.trim(), id]
+      );
+    }
+
+    // Handle photo additions — we only ADD new photos; existing ones remain
+    const [completionRow] = await connection.query('SELECT id FROM staff_job_completions WHERE work_order_id = ?', [id]);
+    const completionId = completionRow.length > 0 ? completionRow[0].id : null;
+    if (completionId && req.files) {
+      for (const cat of ['beforePhotos', 'afterPhotos', 'receipts']) {
+        if (req.files[cat]) {
+          const type = cat === 'beforePhotos' ? 'BEFORE' : cat === 'afterPhotos' ? 'AFTER' : 'RECEIPT';
+          for (const file of req.files[cat]) {
+            const fileUrl = `/uploads/${file.filename}`;
+            await connection.query(
+              'INSERT INTO staff_completion_media (completion_id, work_order_id, file_name, file_path, file_size_bytes, mime_type, media_type) VALUES (?, ?, ?, ?, ?, ?, ?)',
+              [completionId, id, file.originalname, fileUrl, file.size, file.mimetype, type]
+            );
+          }
+        }
+      }
+    }
+
+    // Material reconciliation — fetch old materials
+    if (materials !== undefined) {
+      const [oldMaterials] = await connection.query(
+        'SELECT id, material_name, quantity, unit_cost, inventory_item_id FROM job_material_costs WHERE work_order_id = ?',
+        [id]
+      );
+      await _reconcileInventoryDelta(connection, req.user.id, id, oldMaterials, parsedMaterials);
+    }
+
+    await connection.commit();
+    connection.release();
+    res.status(200).json({ success: true, message: 'Completion evidence updated successfully.' });
+  } catch (err) {
+    if (connection) { await connection.rollback(); connection.release(); }
+    if (req.files) Object.values(req.files).flat().forEach(f => require('fs').unlink(f.path, () => {}));
+    if (err.status) return res.status(err.status).json({ success: false, message: err.message });
+    next(err);
+  }
+}
+
+// @desc    Fetch basic inventory items list for technician materials picker
+// @route   GET /api/v1/staff/inventory
+// @access  Private (Maintenance Staff)
+async function getStaffInventoryItems(req, res, next) {
+  try {
+    const [rows] = await pool.query(
+      "SELECT id, item_name AS itemName, unit FROM inventory_items WHERE status = 'ACTIVE' ORDER BY item_name ASC"
+    );
+    res.status(200).json({ success: true, data: rows });
+  } catch (err) {
+    next(err);
+  }
+}
