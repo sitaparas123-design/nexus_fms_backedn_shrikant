@@ -55,8 +55,8 @@ app.get('/api/v1/health', async (req, res) => {
 // API v1 Routes
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/tenants', tenantRoutes);
-app.use('/api/v1/staff', staffRoutes);
 app.use('/api/v1/staff', staffCompletionRouter);
+app.use('/api/v1/staff', staffRoutes);
 app.use('/api/v1/jobs', jobRoutes);
 app.use('/api/v1/public', publicRoutes);
 app.use('/api/v1/calendar', calendarRoutes);

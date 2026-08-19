@@ -795,6 +795,7 @@ module.exports = {
   completeJobAtomic,
   updateCompletedJobEvidence,
   getStaffInventoryItems,
+  deleteCompletionMedia,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1004,6 +1005,55 @@ async function getStaffInventoryItems(req, res, next) {
       "SELECT id, item_name AS itemName, unit FROM inventory_items WHERE status = 'ACTIVE' ORDER BY item_name ASC"
     );
     res.status(200).json({ success: true, data: rows });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// @desc    Delete completed job completion media item
+// @route   DELETE /api/v1/staff/media/:mediaId
+// @access  Private (Maintenance Staff)
+async function deleteCompletionMedia(req, res, next) {
+  try {
+    const { mediaId } = req.params;
+    const staffProfileId = await getStaffProfileId(req.user.id);
+
+    // Fetch media details
+    const [mediaRows] = await pool.query(
+      `SELECT m.*, w.assigned_staff_id, w.assigned_staff_ids 
+       FROM staff_completion_media m
+       JOIN work_orders w ON m.work_order_id = w.id
+       WHERE m.id = ?`,
+      [mediaId]
+    );
+
+    if (mediaRows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Media item not found.' });
+    }
+
+    const media = mediaRows[0];
+
+    // Ownership check
+    let isOwner = (media.assigned_staff_id === staffProfileId);
+    if (!isOwner && media.assigned_staff_ids) {
+      const ids = typeof media.assigned_staff_ids === 'string' ? JSON.parse(media.assigned_staff_ids) : media.assigned_staff_ids;
+      if (Array.isArray(ids) && ids.includes(staffProfileId)) isOwner = true;
+    }
+
+    if (req.user.role !== 'OFFICE_ADMIN' && !isOwner) {
+      return res.status(403).json({ success: false, message: 'Forbidden. You are not authorized to delete this media item.' });
+    }
+
+    // Delete database row
+    await pool.query('DELETE FROM staff_completion_media WHERE id = ?', [mediaId]);
+
+    // Optional: unlink file from disk
+    const fs = require('fs');
+    const path = require('path');
+    const fullPath = path.join(__dirname, '..', media.file_path);
+    fs.unlink(fullPath, () => {});
+
+    res.status(200).json({ success: true, message: 'Media item deleted successfully.' });
   } catch (err) {
     next(err);
   }

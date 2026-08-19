@@ -11,6 +11,7 @@ const {
   getJobCompletionEvidence,
   updateCompletedJobEvidence,
   getStaffInventoryItems,
+  deleteCompletionMedia,
 } = require('../controllers/staffCompletion.controller');
 const { authenticateToken, authorizeRoles } = require('../middleware/auth.middleware');
 
@@ -35,6 +36,13 @@ router.put(
   authorizeRoles('MAINTENANCE_STAFF'),
   upload.fields([{ name: 'beforePhotos' }, { name: 'afterPhotos' }, { name: 'receipts' }]),
   updateCompletedJobEvidence
+);
+
+// Delete completed job completion media item
+router.delete(
+  '/media/:mediaId',
+  authorizeRoles('MAINTENANCE_STAFF'),
+  deleteCompletionMedia
 );
 
 // Inventory picker for technician materials selection
