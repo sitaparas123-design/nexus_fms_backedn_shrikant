@@ -38,6 +38,7 @@ const dashboardRoutes = require('./routes/dashboard.routes');
 const settingsRoutes = require('./routes/settings.routes');
 const inventoryRoutes = require('./routes/inventory.routes');
 const webhookRoutes = require('./routes/webhook.routes');
+const aiRoutes = require('./routes/ai.routes');
 
 // Health Check Endpoint (Phase 1)
 app.get('/api/v1/health', async (req, res) => {
@@ -66,6 +67,7 @@ app.use('/api/v1/dashboard', dashboardRoutes);
 app.use('/api/v1/settings', settingsRoutes);
 app.use('/api/v1/inventory', inventoryRoutes);
 app.use('/api/v1/webhooks', webhookRoutes);
+app.use('/api/v1/ai', aiRoutes);
 
 // Global 404 Route Handler
 app.use((req, res, next) => {

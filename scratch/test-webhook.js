@@ -2,7 +2,7 @@ require('dotenv').config();
 const http = require('http');
 const { pool } = require('../config/db');
 
-const API_BASE = 'http://localhost:5000/api/v1';
+const API_BASE = 'https://nexusfmsbackednshrikant-production.up.railway.app/api/v1';
 const SECRET = process.env.WEBHOOK_SECRET_KEY || 'test_secret_key_123';
 
 // Force the process env so our test key works if .env wasn't updated
@@ -94,7 +94,7 @@ async function runTests() {
     console.log('\n[4] Verifying MySQL Database Records...');
     const [woRows] = await pool.query('SELECT * FROM work_orders WHERE id = ?', [workOrderId]);
     if (woRows.length === 0) throw new Error('Work order not found in DB!');
-    
+
     const wo = woRows[0];
     if (wo.external_reference_id === testRefId && wo.pipeline_stage === 'Quotes') {
       console.log('✅ Work Order successfully saved with external_reference_id and pipeline_stage=Quotes');
@@ -119,7 +119,7 @@ async function runTests() {
     } else {
       throw new Error(`Expected 200 Duplicate, got ${res.status}`);
     }
-    
+
     // Ensure no second Quote was created
     const [duplicateCheck] = await pool.query('SELECT id FROM work_orders WHERE external_reference_id = ?', [testRefId]);
     if (duplicateCheck.length === 1) {

@@ -2,7 +2,7 @@ const request = require('supertest');
 const jwt = require('jsonwebtoken');
 
 // We use fetch to avoid needing to boot the express app inside the test if it's already running.
-// Assuming the backend is running on http://localhost:5000 or the railway production URL.
+// Assuming the backend is running on https://nexusfmsbackednshrikant-production.up.railway.app or the railway production URL.
 const API_URL = 'https://nexusfmsbackednshrikant-production.up.railway.app/api/v1';
 
 async function runTests() {
@@ -14,7 +14,7 @@ async function runTests() {
     if (body) opts.body = JSON.stringify(body);
     const res = await fetch(`${API_URL}${path}`, opts);
     let data;
-    try { data = await res.json(); } catch(e) { data = null; }
+    try { data = await res.json(); } catch (e) { data = null; }
     return { status: res.status, data };
   }
 

@@ -1,7 +1,7 @@
 async function runTests() {
-  const baseURL = 'http://localhost:5000/api/v1';
+  const baseURL = 'https://nexusfmsbackednshrikant-production.up.railway.app/api/v1';
   let token = '';
-  
+
   try {
     console.log('1. Login as Admin...');
     const loginRes = await fetch(`${baseURL}/auth/login`, {
@@ -14,7 +14,7 @@ async function runTests() {
     token = loginData.token || loginData.data?.token;
     console.log('✅ Logged in successfully. Token length:', token ? token.length : 'none');
 
-    const headers = { 
+    const headers = {
       'Authorization': `Bearer ${token}`,
       'Content-Type': 'application/json'
     };
@@ -53,12 +53,12 @@ async function runTests() {
       headers,
       body: JSON.stringify({ quantity: 20 })
     });
-    
+
     console.log('\\n5. Verify Normal Stock Status...');
     const getRes2 = await fetch(`${baseURL}/inventory/${itemId}`, { headers });
     const getData2 = await getRes2.json();
     const updatedItem = getData2.data;
-    
+
     if (updatedItem.currentQuantity === 25) {
       console.log('✅ Quantity correctly updated to 25.');
     } else {
@@ -78,11 +78,11 @@ async function runTests() {
       body: JSON.stringify({ email: 'staff@nexusfms.com', password: 'Password123!' })
     });
     const tenantData = await tenantLogin.json();
-    
+
     const unauthGetRes = await fetch(`${baseURL}/inventory`, {
       headers: { Authorization: `Bearer ${tenantData.token}` }
     });
-    
+
     if (unauthGetRes.status === 403) {
       console.log('✅ Tenant blocked from accessing inventory (403 Forbidden).');
     } else {

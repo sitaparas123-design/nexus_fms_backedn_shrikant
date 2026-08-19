@@ -8,7 +8,7 @@ const { authenticateToken, authorizeRoles } = require('../middleware/auth.middle
 
 // All endpoints here require authentication and Admin role
 router.use(authenticateToken);
-router.use(authorizeRoles('OFFICE_ADMIN'));
+router.use(authorizeRoles('OFFICE_ADMIN', 'OFFICE_TEAM'));
 
 router.get('/', getBookingRequests);
 router.post('/', generateBookingLink);

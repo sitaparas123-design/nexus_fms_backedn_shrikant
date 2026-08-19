@@ -446,20 +446,22 @@ const createJob = async (req, res, next) => {
     const jobNumber = `JOB-2026-${randomNumber}`;
     const secureToken = `tok_${crypto.randomBytes(32).toString('hex')}`;
 
+    const actualMgrEmail = (req.body.actual_manager_email || req.body.manager_email || req.user.email || null);
+
     const [result] = await pool.query(
       `INSERT INTO work_orders (
         job_number, title, resident_id, resident_name, contact_phone, contact_email,
         property_address, description, duration_hours, pipeline_stage,
         assigned_staff_id, assigned_staff_ids, priority, latitude, longitude,
         manager_name, quote_amount, scheduled_date,
-        scheduled_time_slot, secure_token, created_by
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        scheduled_time_slot, secure_token, created_by, manager_email
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         jobNumber, jobTitle, resId, resName, resPhone, resEmail,
         resAddress, jobDesc, hours, stage,
         rawStaffId, staffIdsJson, jobPriority, mockLat, mockLng,
         mgrName, quoteVal, schedDate,
-        schedSlot, secureToken, req.user.id
+        schedSlot, secureToken, req.user.id, actualMgrEmail
       ]
     );
 

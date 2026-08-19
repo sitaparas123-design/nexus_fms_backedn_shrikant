@@ -4,7 +4,7 @@ const axios = require('axios');
 const assert = require('assert');
 const jwt = require('jsonwebtoken');
 
-const API_BASE = 'http://localhost:5000/api/v1';
+const API_BASE = process.env.TEST_API_URL || 'http://localhost:5000/api/v1';
 
 let adminToken = '';
 let officeTeamToken = '';
@@ -21,7 +21,7 @@ const wait = (ms) => new Promise(r => setTimeout(r, ms));
 
 async function setupTestData() {
   console.log('--- Setting up Test Data ---');
-  
+
   // Create / Get users for each role
   const secret = process.env.JWT_SECRET || 'nexus_fms_jwt_secret_key_2026_super_secure';
 
@@ -40,10 +40,10 @@ async function setupTestData() {
 
   const [techRows] = await pool.query('SELECT u.id, sp.id as profile_id FROM users u JOIN staff_profiles sp ON u.id = sp.user_id WHERE u.role="MAINTENANCE_STAFF" LIMIT 2');
   if (techRows.length < 2) {
-      console.log('Need at least 2 technicians for RBAC tests. Aborting setup.');
-      process.exit(1);
+    console.log('Need at least 2 technicians for RBAC tests. Aborting setup.');
+    process.exit(1);
   }
-  
+
   techId = techRows[0].id;
   testStaffProfileId = techRows[0].profile_id;
   techToken = jwt.sign({ id: techId, role: 'MAINTENANCE_STAFF' }, secret, { expiresIn: '1h' });
@@ -60,7 +60,7 @@ async function setupTestData() {
 
 async function testFlowE_FinancialIsolation() {
   console.log('\n--- FLOW E: Financial Isolation ---');
-  
+
   // 1. Admin creates a job with quote_amount
   const createRes = await axios.post(`${API_BASE}/jobs`, {
     title: 'Financial Isolation Test',
@@ -69,17 +69,17 @@ async function testFlowE_FinancialIsolation() {
     pipeline_stage: 'Jobs',
     quote_amount: 1500.50
   }, { headers: { Authorization: `Bearer ${adminToken}` } });
-  
+
   const jobId = createRes.data.data.id;
-  
+
   // 2. Admin fetches jobs -> sees quoteAmount
   const adminGet = await axios.get(`${API_BASE}/jobs/${jobId}`, { headers: { Authorization: `Bearer ${adminToken}` } });
   assert.strictEqual(adminGet.data.data.quoteAmount, 1500.5, 'Admin cannot see quoteAmount');
-  
+
   // 3. Office Team fetches job -> MUST NOT see quoteAmount
   const officeGet = await axios.get(`${API_BASE}/jobs/${jobId}`, { headers: { Authorization: `Bearer ${officeTeamToken}` } });
   assert.strictEqual(officeGet.data.data.quoteAmount, undefined, 'Office Team sees quoteAmount!');
-  
+
   // 4. Tech fetches job -> MUST NOT see quoteAmount
   const techGet = await axios.get(`${API_BASE}/staff/my-jobs/${jobId}`, { headers: { Authorization: `Bearer ${techToken}` } });
   assert.strictEqual(techGet.data.data.quoteAmount, undefined, 'Tech sees quoteAmount!');
@@ -88,17 +88,17 @@ async function testFlowE_FinancialIsolation() {
   await axios.put(`${API_BASE}/jobs/${jobId}/status`, {
     quote_amount: 9999
   }, { headers: { Authorization: `Bearer ${officeTeamToken}` } });
-  
+
   // 6. Verify quoteAmount did not change
   const checkGet = await axios.get(`${API_BASE}/jobs/${jobId}`, { headers: { Authorization: `Bearer ${adminToken}` } });
   assert.strictEqual(checkGet.data.data.quoteAmount, 1500.5, 'Office Team successfully manipulated quoteAmount!');
-  
+
   console.log('✅ Financial Isolation & Write Protection PASSED.');
 }
 
 async function testFlowF_RBACAttacks() {
   console.log('\n--- FLOW F: RBAC Attacks ---');
-  
+
   const attemptAccess = async (url, token, expectedStatus = 403) => {
     console.log(`Attempting access to ${url} expecting ${expectedStatus}`);
     try {
@@ -145,7 +145,7 @@ async function testFlowF_RBACAttacks() {
 
 async function testFlowG_DoubleBooking() {
   console.log('\n--- FLOW G: Double Booking Concurrency Test ---');
-  
+
   // 1. Create a job
   const createRes = await axios.post(`${API_BASE}/jobs`, {
     title: 'Double Booking Test',
@@ -169,7 +169,7 @@ async function testFlowG_DoubleBooking() {
     const tmr = new Date();
     tmr.setDate(tmr.getDate() + i);
     const candidateDate = tmr.toISOString().split('T')[0];
-    
+
     const availRes = await axios.get(`${API_BASE}/public/booking/${token}/available-slots?date=${candidateDate}`);
     if (availRes.data.availability.availableSlots.length > 0) {
       targetDate = candidateDate;
@@ -212,30 +212,30 @@ async function testFlowG_DoubleBooking() {
 }
 
 async function testDuplicateAutomation() {
-    console.log('\n--- FLOW H: Duplicate Automation Test ---');
-    const createRes = await axios.post(`${API_BASE}/jobs`, {
-      title: 'Idempotency Test',
-      resident_id: testResidentId,
-      assigned_staff_id: testStaffProfileId,
-      pipeline_stage: 'Quotes'
-    }, { headers: { Authorization: `Bearer ${adminToken}` } });
-    const jobId = createRes.data.data.id;
-  
-    await wait(1000); // wait for photo trigger
-  
-    await axios.put(`${API_BASE}/jobs/${jobId}/stage`, { section: 'Jobs' }, { headers: { Authorization: `Bearer ${adminToken}` } });
-    await axios.put(`${API_BASE}/jobs/${jobId}/stage`, { section: 'Quotes' }, { headers: { Authorization: `Bearer ${adminToken}` } });
-    await axios.put(`${API_BASE}/jobs/${jobId}/stage`, { section: 'Jobs' }, { headers: { Authorization: `Bearer ${adminToken}` } });
-  
-    await wait(1000);
-  
-    const [qr] = await pool.query('SELECT COUNT(*) as c FROM quote_requests WHERE work_order_id = ?', [jobId]);
-    assert.strictEqual(qr[0].c, 1, 'Duplicate quote requests created!');
-    
-    const [br] = await pool.query('SELECT COUNT(*) as c FROM booking_requests WHERE work_order_id = ?', [jobId]);
-    assert.strictEqual(br[0].c, 1, 'Duplicate booking requests created!');
-    
-    console.log('✅ Duplicate Automation Prevented PASSED.');
+  console.log('\n--- FLOW H: Duplicate Automation Test ---');
+  const createRes = await axios.post(`${API_BASE}/jobs`, {
+    title: 'Idempotency Test',
+    resident_id: testResidentId,
+    assigned_staff_id: testStaffProfileId,
+    pipeline_stage: 'Quotes'
+  }, { headers: { Authorization: `Bearer ${adminToken}` } });
+  const jobId = createRes.data.data.id;
+
+  await wait(1000); // wait for photo trigger
+
+  await axios.put(`${API_BASE}/jobs/${jobId}/stage`, { section: 'Jobs' }, { headers: { Authorization: `Bearer ${adminToken}` } });
+  await axios.put(`${API_BASE}/jobs/${jobId}/stage`, { section: 'Quotes' }, { headers: { Authorization: `Bearer ${adminToken}` } });
+  await axios.put(`${API_BASE}/jobs/${jobId}/stage`, { section: 'Jobs' }, { headers: { Authorization: `Bearer ${adminToken}` } });
+
+  await wait(1000);
+
+  const [qr] = await pool.query('SELECT COUNT(*) as c FROM quote_requests WHERE work_order_id = ?', [jobId]);
+  assert.strictEqual(qr[0].c, 1, 'Duplicate quote requests created!');
+
+  const [br] = await pool.query('SELECT COUNT(*) as c FROM booking_requests WHERE work_order_id = ?', [jobId]);
+  assert.strictEqual(br[0].c, 1, 'Duplicate booking requests created!');
+
+  console.log('✅ Duplicate Automation Prevented PASSED.');
 }
 
 async function runAll() {
@@ -245,7 +245,7 @@ async function runAll() {
     await testFlowF_RBACAttacks();
     await testFlowG_DoubleBooking();
     await testDuplicateAutomation();
-    
+
     console.log('\n✅✅✅ ALL E2E TESTS PASSED SUCCESSFULLY ✅✅✅');
     process.exit(0);
   } catch (err) {

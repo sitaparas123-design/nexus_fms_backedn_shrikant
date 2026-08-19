@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const { pool } = require('../config/db');
 const { pipeline } = require('stream/promises');
+const { triggerAutoPhotoRequest } = require('../services/quoteRequest.service');
 
 // Allowed MIME types for attachments
 const ALLOWED_MIME_TYPES = [
@@ -27,7 +28,9 @@ const handleIncomingEmailQuote = async (req, res) => {
       property_address,
       description,
       priority,
-      attachments
+      attachments,
+      manager_name,
+      manager_email
     } = req.body;
 
     // 1. Validation
@@ -89,12 +92,14 @@ const handleIncomingEmailQuote = async (req, res) => {
         `INSERT INTO work_orders (
           job_number, external_reference_id, title, resident_id, resident_name, contact_phone, contact_email,
           property_address, description, duration_hours, pipeline_stage,
-          priority, secure_token, created_by
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          priority, secure_token, created_by, manager_name, manager_email
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           jobNumber, reference_id, subject.trim(), resId, resName, resPhone, resEmail,
           resAddress, description ? description.trim() : null, 1.5, 'Quotes',
-          jobPriority, secureToken, null // System generated (created_by is null)
+          jobPriority, secureToken, null,
+          manager_name ? manager_name.trim() : 'Email Requester',
+          manager_email ? manager_email.trim() : null
         ]
       );
       
@@ -169,6 +174,9 @@ const handleIncomingEmailQuote = async (req, res) => {
     } finally {
       conn.release();
     }
+
+    // Trigger photo request automatically
+    await triggerAutoPhotoRequest(workOrderId);
 
     return res.status(201).json({
       success: true,

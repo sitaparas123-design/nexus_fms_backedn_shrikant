@@ -1,6 +1,7 @@
 const { pool } = require('../config/db');
 const { sendEmail } = require('./notification/providers/email.provider');
 const { sendSms } = require('./notification/providers/sms.provider');
+const { dispatchN8NWebhook } = require('./webhook.service');
 
 let ioInstance = null;
 
@@ -120,6 +121,21 @@ const notificationService = {
            return await sendSms({ to: contactPhone, message: finalMessage });
          });
       }
+
+      // Dispatch event to N8N webhook asynchronously without blocking main flow
+      dispatchN8NWebhook(type, {
+        notificationId,
+        type,
+        title,
+        message: finalMessage,
+        recipientUserId,
+        contactEmail,
+        contactPhone,
+        actionUrl,
+        entityType: relatedEntityType,
+        entityId: relatedEntityId,
+        data: sanitizedData || structuredData || null,
+      }).catch(err => console.warn('[N8N_DISPATCH_WARN] Async webhook skipped:', err.message));
 
     } catch (error) {
       console.error('[NotificationService] Dispatch failed:', error);

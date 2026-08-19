@@ -29,8 +29,8 @@ router.post('/jobs/:id/photos', photoUpload.array('photos', 5), uploadCompletion
 router.put('/jobs/:id/complete', markJobComplete);
 
 // Read Endpoints (Accessible by Office Admin & Maintenance Staff)
-router.get('/', authorizeRoles('OFFICE_ADMIN', 'MAINTENANCE_STAFF'), getStaff);
-router.get('/:id', authorizeRoles('OFFICE_ADMIN', 'MAINTENANCE_STAFF'), getStaffById);
+router.get('/', authorizeRoles('OFFICE_ADMIN', 'MAINTENANCE_STAFF', 'OFFICE_TEAM'), getStaff);
+router.get('/:id', authorizeRoles('OFFICE_ADMIN', 'MAINTENANCE_STAFF', 'OFFICE_TEAM'), getStaffById);
 
 // Write / Management Endpoints
 router.post('/', authorizeRoles('OFFICE_ADMIN'), photoUpload.single('avatar'), createStaff);

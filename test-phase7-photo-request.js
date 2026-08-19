@@ -5,14 +5,14 @@ const FormData = require('form-data');
 const { pool } = require('./config/db');
 const { runPhotoReminderJob } = require('./scheduler/photoReminderJob');
 
-const BASE_URL = process.env.VITE_API_URL || 'http://localhost:5000/api/v1';
+const BASE_URL = process.env.VITE_API_URL || 'https://nexusfmsbackednshrikant-production.up.railway.app/api/v1';
 
 async function runPhase7Tests() {
   console.log("=== STARTING PHASE 7 TESTS ===");
   let adminToken;
   let testJobId;
   let secureToken;
-  
+
   try {
     // 1. Login as Admin
     const loginRes = await axios.post(`${BASE_URL}/auth/login`, {
@@ -68,7 +68,7 @@ async function runPhase7Tests() {
 
     // 6. Test Scheduler Limits
     console.log("Testing scheduler with mocked dates...");
-    
+
     let mockJobId;
     try {
       const mockJobNumber = 'JOB-TEST-' + Math.floor(Math.random() * 1000000);
@@ -79,10 +79,10 @@ async function runPhase7Tests() {
       );
       mockJobId = mockJobRes.insertId;
       console.log('✅ Mock Job created (ID: ' + mockJobId + ')');
-    } catch(err) {
+    } catch (err) {
       throw new Error("Failed to insert mock job: " + err.message);
     }
-    
+
     // Insert pending QR created 4 days ago
     try {
       const pastDateStr = new Date(Date.now() - 4 * 24 * 60 * 60 * 1000).toISOString().slice(0, 19).replace('T', ' ');
@@ -92,7 +92,7 @@ async function runPhase7Tests() {
         [mockJobId, 'mock_tok_123', pastDateStr, futureDateStr]
       );
       console.log('✅ Mock Quote Request inserted');
-    } catch(err) {
+    } catch (err) {
       throw new Error("Failed to insert mock quote request: " + err.message);
     }
 

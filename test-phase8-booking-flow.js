@@ -4,7 +4,7 @@ const axios = require('axios');
 const assert = require('assert');
 const jwt = require('jsonwebtoken');
 
-const API_BASE = 'http://localhost:5000/api/v1';
+const API_BASE = process.env.TEST_API_URL || 'http://localhost:5000/api/v1';
 let authToken = '';
 let testStaffId = null;
 let testResidentId = null;
@@ -13,7 +13,7 @@ let secureToken = null;
 
 async function setupTestData() {
   console.log('--- Setting up Test Data ---');
-  
+
   // Create an admin JWT directly
   const [adminRows] = await pool.query('SELECT id, role FROM users WHERE role="OFFICE_ADMIN" LIMIT 1');
   const adminId = adminRows[0].id;
@@ -72,7 +72,7 @@ async function testTriggerBookingRequest() {
   await axios.put(`${API_BASE}/jobs/${testWorkOrderId}/stage`, {
     pipeline_stage: 'Completed Quotes'
   }, { headers: { Authorization: `Bearer ${authToken}` } });
-  
+
   await axios.put(`${API_BASE}/jobs/${testWorkOrderId}/stage`, {
     pipeline_stage: 'Jobs'
   }, { headers: { Authorization: `Bearer ${authToken}` } });
@@ -85,7 +85,7 @@ async function testTriggerBookingRequest() {
 
 async function testPublicEndpoints() {
   console.log('--- Testing Public Endpoints ---');
-  
+
   // GET request info
   const infoRes = await axios.get(`${API_BASE}/public/request/${secureToken}`);
   assert.strictEqual(infoRes.data.type, 'BOOKING', 'Incorrect public type');
@@ -99,7 +99,7 @@ async function testPublicEndpoints() {
     const tmr = new Date();
     tmr.setDate(tmr.getDate() + i);
     const candidateDate = tmr.toISOString().split('T')[0];
-    
+
     const availRes = await axios.get(`${API_BASE}/public/booking/${secureToken}/available-slots?date=${candidateDate}`);
     if (availRes.data.availability.availableSlots.length > 0) {
       targetDate = candidateDate;
@@ -118,13 +118,13 @@ async function testPublicEndpoints() {
     selectedDate: targetDate,
     selectedTimeSlot: selectedSlot
   });
-  
+
   assert.strictEqual(confirmRes.data.success, true);
   console.log('✅ Booking confirmed successfully!');
 
   const [brRows] = await pool.query('SELECT status, booked_at FROM booking_requests WHERE work_order_id = ?', [testWorkOrderId]);
   assert.strictEqual(brRows[0].status, 'BOOKED', 'Booking request status not updated to BOOKED');
-  
+
   const [woRows] = await pool.query('SELECT scheduled_date, scheduled_time_slot, pipeline_stage FROM work_orders WHERE id = ?', [testWorkOrderId]);
   assert.strictEqual(woRows[0].pipeline_stage, 'Jobs');
   console.log(`✅ Database states updated. Scheduled for ${targetDate} at ${selectedSlot}`);
@@ -136,7 +136,7 @@ async function testConcurrentBookings() {
   const createRes = await axios.post(`${API_BASE}/jobs`, {
     title: 'Test Concurrent', description: 'Concurrent', duration_hours: 1, resident_id: testResidentId, assigned_staff_id: testStaffId, pipeline_stage: 'Jobs', priority: 'NORMAL'
   }, { headers: { Authorization: `Bearer ${authToken}` } });
-  
+
   const id2 = createRes.data.data.id;
   await new Promise(r => setTimeout(r, 1000));
   const [brRows] = await pool.query('SELECT secure_token FROM booking_requests WHERE work_order_id = ?', [id2]);
@@ -165,7 +165,7 @@ async function testConcurrentBookings() {
   const p2 = axios.post(`${API_BASE}/public/booking/${token2}/confirm`, { selectedDate: targetDate, selectedTimeSlot: selectedSlot });
 
   const results = await Promise.allSettled([p1, p2]);
-  
+
   let successes = 0;
   let failures = 0;
   for (const r of results) {

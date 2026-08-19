@@ -345,11 +345,17 @@ const submitPublicBooking = async (req, res, next) => {
       [dateVal, slotVal, workOrderId]
     );
 
-    const [woRows] = await connection.query("SELECT title, resident_name, property_address, assigned_staff_id FROM work_orders WHERE id = ?", [workOrderId]);
+    const [woRows] = await connection.query(
+      "SELECT title, resident_name, property_address, assigned_staff_id, manager_name, manager_email, job_number FROM work_orders WHERE id = ?",
+      [workOrderId]
+    );
     const jobTitle = woRows[0]?.title || 'Repair Job';
     const resName = woRows[0]?.resident_name || 'Resident';
     const resAddress = woRows[0]?.property_address || 'Property';
     const targetStaffId = woRows[0]?.assigned_staff_id;
+    const mgrName = woRows[0]?.manager_name || 'Manager';
+    const mgrEmail = woRows[0]?.manager_email;
+    const jobNum = woRows[0]?.job_number || '';
 
     // 1. Notify Admins
     const [admins] = await connection.query("SELECT id FROM users WHERE role = 'OFFICE_ADMIN'");
@@ -379,6 +385,32 @@ const submitPublicBooking = async (req, res, next) => {
           actionUrl: `/maintenance/my-tasks`
         }, connection);
       }
+    }
+
+    // 3. Email confirmation to the manager who requested the works
+    if (mgrEmail) {
+      const emailSubject = `Booking Confirmed: Job #${jobNum} - ${jobTitle}`;
+      const emailBody = `Dear ${mgrName},\n\nThe resident (${resName}) has scheduled their booking for ${jobTitle} at ${resAddress}.\n\nScheduled Date: ${dateVal}\nTime Slot: ${slotVal}\n\nThank you,\nNexus FMS Team`;
+
+      await notificationService.dispatch({
+        recipientUserId: null,
+        recipientRole: 'OFFICE_ADMIN',
+        type: 'MANAGER_BOOKING_CONFIRMATION',
+        title: emailSubject,
+        messageTemplate: emailBody,
+        structuredData: {
+          manager_name: mgrName,
+          job_number: jobNum,
+          scheduled_date: dateVal,
+          scheduled_time_slot: slotVal
+        },
+        actionUrl: `/admin/calendar`,
+        relatedEntityType: 'work_orders',
+        relatedEntityId: workOrderId,
+        channels: ['EMAIL'],
+        contactEmail: mgrEmail,
+        connection
+      }).catch(err => console.error('[Manager Booking Confirmation Email Error]', err));
     }
 
     await connection.commit();
