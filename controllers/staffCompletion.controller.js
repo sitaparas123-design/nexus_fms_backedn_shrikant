@@ -410,10 +410,12 @@ const markJobComplete = async (req, res, next) => {
       [id]
     );
 
-    const [woRows] = await pool.query("SELECT title, assigned_staff_id, assigned_staff_ids, duration_hours FROM work_orders WHERE id = ?", [id]);
+    const [woRows] = await pool.query("SELECT title, assigned_staff_id, assigned_staff_ids, duration_hours, resident_id, property_address FROM work_orders WHERE id = ?", [id]);
     const jobTitle = woRows[0]?.title || 'Repair Job';
     const assignedStaffId = woRows[0]?.assigned_staff_id;
     const durationHours = parseFloat(woRows[0]?.duration_hours || 1.5);
+    const residentId = woRows[0]?.resident_id;
+    const propertyAddress = woRows[0]?.property_address;
 
     // ==========================================
     // KPI POINTS CALCULATION
@@ -434,6 +436,45 @@ const markJobComplete = async (req, res, next) => {
         "UPDATE staff_profiles SET jobs_completed = jobs_completed + 1, kpi_score = kpi_score + ? WHERE id = ?",
         [pointsEarned, sId]
       );
+
+      // ── Revisit Detection ─────────────────────────────────────────────────
+      // A revisit is when the same technician has already completed a prior job
+      // for the same resident or property address (excluding the current job).
+      try {
+        let revisitQuery;
+        let revisitParams;
+        if (residentId) {
+          revisitQuery = `
+            SELECT COUNT(*) as cnt FROM work_orders w
+            WHERE w.pipeline_stage = 'Completed Jobs'
+              AND w.id != ?
+              AND w.resident_id = ?
+              AND (w.assigned_staff_id = ? OR (w.assigned_staff_ids IS NOT NULL AND JSON_CONTAINS(w.assigned_staff_ids, CAST(? AS JSON), '$')))
+          `;
+          revisitParams = [id, residentId, sId, sId];
+        } else if (propertyAddress) {
+          revisitQuery = `
+            SELECT COUNT(*) as cnt FROM work_orders w
+            WHERE w.pipeline_stage = 'Completed Jobs'
+              AND w.id != ?
+              AND w.property_address = ?
+              AND (w.assigned_staff_id = ? OR (w.assigned_staff_ids IS NOT NULL AND JSON_CONTAINS(w.assigned_staff_ids, CAST(? AS JSON), '$')))
+          `;
+          revisitParams = [id, propertyAddress, sId, sId];
+        }
+        if (revisitQuery) {
+          const [[revisitRows]] = await pool.query(revisitQuery, revisitParams);
+          if (revisitRows.cnt > 0) {
+            await pool.query(
+              "UPDATE staff_profiles SET revisits = revisits + 1 WHERE id = ?",
+              [sId]
+            );
+          }
+        }
+      } catch (revisitErr) {
+        console.warn('[KPI] Revisit detection failed (non-fatal):', revisitErr.message);
+      }
+      // ─────────────────────────────────────────────────────────────────────
     }
     // ==========================================
 
