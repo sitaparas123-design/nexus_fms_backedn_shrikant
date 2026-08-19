@@ -122,12 +122,14 @@ const createInventoryItem = async (req, res, next) => {
 const updateInventoryItem = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { itemName, sku, description, category, minThreshold, unit, supplier, status } = req.body;
+    const { itemName, sku, description, category, currentQuantity, current_quantity, minThreshold, unit, supplier, status } = req.body;
 
     const [existing] = await pool.query('SELECT id FROM inventory_items WHERE id = ?', [id]);
     if (existing.length === 0) {
       return res.status(404).json({ success: false, message: 'Item not found' });
     }
+
+    const finalQuantity = currentQuantity !== undefined ? currentQuantity : (current_quantity !== undefined ? current_quantity : null);
 
     await pool.query(
       `UPDATE inventory_items SET 
@@ -135,12 +137,13 @@ const updateInventoryItem = async (req, res, next) => {
         sku = COALESCE(?, sku),
         description = COALESCE(?, description),
         category = COALESCE(?, category),
+        current_quantity = COALESCE(?, current_quantity),
         min_threshold = COALESCE(?, min_threshold),
         unit = COALESCE(?, unit),
         supplier = COALESCE(?, supplier),
         status = COALESCE(?, status)
        WHERE id = ?`,
-      [itemName, sku, description, category, minThreshold, unit, supplier, status, id]
+      [itemName, sku, description, category, finalQuantity, minThreshold, unit, supplier, status, id]
     );
 
     res.status(200).json({ success: true, message: 'Inventory item updated successfully' });
