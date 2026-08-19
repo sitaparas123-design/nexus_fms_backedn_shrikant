@@ -29,6 +29,7 @@ router.put('/jobs/:id/complete', markJobComplete);
 
 // View completion evidence (report, photos, materials)
 router.get('/jobs/:id/completion-evidence', getJobCompletionEvidence);
+router.get('/jobs/:id/completion', getJobCompletionEvidence);
 
 // Edit completion evidence for an already-completed job (own jobs only)
 router.put(
