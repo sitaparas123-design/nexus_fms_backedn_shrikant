@@ -801,7 +801,7 @@ module.exports = {
 // ─────────────────────────────────────────────────────────────────────────────
 // INTERNAL: helper to reconcile material delta and adjust warehouse stock
 // ─────────────────────────────────────────────────────────────────────────────
-async function _reconcileInventoryDelta(connection, userId, jobId, oldMaterials, newMaterials) {
+async function _reconcileInventoryDelta(connection, userId, staffProfileId, jobId, oldMaterials, newMaterials) {
   // Build maps keyed by job_material_costs.id for old materials
   const oldMap = {};
   for (const om of oldMaterials) {
@@ -877,7 +877,7 @@ async function _reconcileInventoryDelta(connection, userId, jobId, oldMaterials,
     const invItemId = nm.inventory_item_id ? Number(nm.inventory_item_id) : null;
     await connection.query(
       'INSERT INTO job_material_costs (work_order_id, technician_id, material_name, quantity, unit_cost, total_cost, inventory_item_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      [jobId, userId, nm.material_name, qty, uCost, qty * uCost, invItemId]
+      [jobId, staffProfileId, nm.material_name, qty, uCost, qty * uCost, invItemId]
     );
     if (invItemId) {
       const [invRows] = await connection.query('SELECT id, item_name, current_quantity FROM inventory_items WHERE id = ? FOR UPDATE', [invItemId]);
@@ -982,7 +982,7 @@ async function updateCompletedJobEvidence(req, res, next) {
         'SELECT id, material_name, quantity, unit_cost, inventory_item_id FROM job_material_costs WHERE work_order_id = ?',
         [id]
       );
-      await _reconcileInventoryDelta(connection, req.user.id, id, oldMaterials, parsedMaterials);
+      await _reconcileInventoryDelta(connection, req.user.id, staffProfileId, id, oldMaterials, parsedMaterials);
     }
 
     await connection.commit();
