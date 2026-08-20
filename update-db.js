@@ -26,7 +26,8 @@ async function updateLiveDB() {
       "ALTER TABLE work_orders ADD COLUMN assigned_staff_ids JSON DEFAULT NULL;",
       "ALTER TABLE staff_profiles ADD COLUMN kpi_score INT NOT NULL DEFAULT 0;",
       "ALTER TABLE staff_profiles ADD COLUMN jobs_completed INT NOT NULL DEFAULT 0;",
-      "ALTER TABLE staff_profiles ADD COLUMN revisits INT NOT NULL DEFAULT 0;"
+      "ALTER TABLE staff_profiles ADD COLUMN revisits INT NOT NULL DEFAULT 0;",
+      "ALTER TABLE staff_profiles ADD COLUMN duty_status VARCHAR(50) NOT NULL DEFAULT 'AVAILABLE';"
     ];
 
     for (const q of queries) {

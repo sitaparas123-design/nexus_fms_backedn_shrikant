@@ -33,6 +33,7 @@ const getStaff = async (req, res, next) => {
         sp.revisits,
         sp.home_address,
         sp.home_postcode,
+        sp.duty_status,
         sp.created_at,
         sp.updated_at,
         COUNT(DISTINCT CASE WHEN w.pipeline_stage = 'Completed Jobs' THEN w.id END) as live_completed_jobs
@@ -88,6 +89,7 @@ const getStaff = async (req, res, next) => {
         revisitRate: computedRevisitRate,
         homeAddress: r.home_address || '',
         homePostcode: r.home_postcode || '',
+        dutyStatus: r.duty_status || 'AVAILABLE',
       };
     });
 
@@ -116,7 +118,7 @@ const getStaffById = async (req, res, next) => {
         sp.working_days_json, sp.work_start_time, sp.work_end_time,
         sp.break_start_time, sp.break_end_time, sp.unavailable_dates_json,
         sp.kpi_score, sp.jobs_completed, sp.revisits,
-        sp.home_address, sp.home_postcode
+        sp.home_address, sp.home_postcode, sp.duty_status
       FROM users u
       LEFT JOIN staff_profiles sp ON u.id = sp.user_id
       WHERE sp.id = ? OR u.id = ?`,
@@ -157,6 +159,7 @@ const getStaffById = async (req, res, next) => {
       revisits: r.revisits || 0,
       homeAddress: r.home_address || '',
       homePostcode: r.home_postcode || '',
+      dutyStatus: r.duty_status || 'AVAILABLE',
     };
 
     res.status(200).json({
@@ -293,7 +296,7 @@ const updateStaff = async (req, res, next) => {
   try {
     const { id } = req.params;
     const cleanId = id.replace(/^(stf-|usr-)/, '');
-    const { full_name, name, phone, email, avatarUrl, avatar_url, role, role_title, color, workingDays, startTime, endTime, password, home_address, homeAddress, home_postcode, homePostcode } = req.body;
+    const { full_name, name, phone, email, avatarUrl, avatar_url, role, role_title, color, workingDays, startTime, endTime, password, home_address, homeAddress, home_postcode, homePostcode, dutyStatus, duty_status } = req.body;
 
     const [existing] = await connection.query(
       'SELECT sp.id as profile_id, sp.user_id FROM staff_profiles sp WHERE sp.id = ? OR sp.user_id = ?',
@@ -361,6 +364,7 @@ const updateStaff = async (req, res, next) => {
     const daysJson = daysArray ? JSON.stringify(daysArray) : null;
     const staffHomeAddress = home_address || homeAddress || null;
     const staffHomePostcode = home_postcode || homePostcode || null;
+    const staffDutyStatus = dutyStatus || duty_status || null;
     await connection.query(
       `UPDATE staff_profiles SET 
         role_title = COALESCE(?, role_title),
@@ -369,9 +373,10 @@ const updateStaff = async (req, res, next) => {
         work_start_time = COALESCE(?, work_start_time),
         work_end_time = COALESCE(?, work_end_time),
         home_address = CASE WHEN ? IS NOT NULL THEN ? ELSE home_address END,
-        home_postcode = CASE WHEN ? IS NOT NULL THEN ? ELSE home_postcode END
+        home_postcode = CASE WHEN ? IS NOT NULL THEN ? ELSE home_postcode END,
+        duty_status = COALESCE(?, duty_status)
        WHERE id = ?`,
-      [staffRoleTitle, color, daysJson, startTime, endTime, staffHomeAddress, staffHomeAddress, staffHomePostcode, staffHomePostcode, profileId]
+      [staffRoleTitle, color, daysJson, startTime, endTime, staffHomeAddress, staffHomeAddress, staffHomePostcode, staffHomePostcode, staffDutyStatus, profileId]
     );
 
     await connection.commit();
