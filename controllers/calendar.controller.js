@@ -1,5 +1,5 @@
 const { pool } = require('../config/db');
-const { calculateStaffAvailableSlots, timeToMinutes } = require('../services/availability.service');
+const { calculateStaffAvailableSlots, calculateMultiStaffAvailableSlots, timeToMinutes } = require('../services/availability.service');
 const notificationService = require('../services/notification.service');
 
 // Helper to resolve staff profile ID from logged in user ID
@@ -213,9 +213,9 @@ const getPublicBookingAvailableSlots = async (req, res, next) => {
       });
     }
 
-    // 1. Resolve Work Order & Assigned Technician from Token
+    // 1. Resolve Work Order & Assigned / Preferred Technician from Token
     const [bookingRows] = await pool.query(
-      `SELECT b.id as request_id, b.work_order_id, w.assigned_staff_id, w.duration_hours, w.title, w.resident_name
+      `SELECT b.id as request_id, b.work_order_id, b.assignment_preference_staff_id, w.assigned_staff_id, w.duration_hours, w.title, w.description, w.resident_name, w.property_address
        FROM booking_requests b
        JOIN work_orders w ON b.work_order_id = w.id
        WHERE b.secure_token = ?`,
@@ -225,20 +225,35 @@ const getPublicBookingAvailableSlots = async (req, res, next) => {
     let workOrderId = null;
     let staffProfileId = null;
     let durationHours = 1.5;
+    let jobDetails = {};
 
     if (bookingRows.length > 0) {
-      workOrderId = bookingRows[0].work_order_id;
-      staffProfileId = bookingRows[0].assigned_staff_id;
-      durationHours = parseFloat(bookingRows[0].duration_hours || 1.5);
+      const b = bookingRows[0];
+      workOrderId = b.work_order_id;
+      staffProfileId = b.assigned_staff_id || b.assignment_preference_staff_id;
+      durationHours = parseFloat(b.duration_hours || 1.5);
+      jobDetails = {
+        title: b.title,
+        description: b.description,
+        property_address: b.property_address,
+        resident_name: b.resident_name,
+      };
     } else {
       const [jobRows] = await pool.query(
-        'SELECT id, assigned_staff_id, duration_hours FROM work_orders WHERE secure_token = ?',
+        'SELECT id, assigned_staff_id, duration_hours, title, description, property_address, resident_name FROM work_orders WHERE secure_token = ?',
         [token]
       );
       if (jobRows.length > 0) {
-        workOrderId = jobRows[0].id;
-        staffProfileId = jobRows[0].assigned_staff_id;
-        durationHours = parseFloat(jobRows[0].duration_hours || 1.5);
+        const j = jobRows[0];
+        workOrderId = j.id;
+        staffProfileId = j.assigned_staff_id;
+        durationHours = parseFloat(j.duration_hours || 1.5);
+        jobDetails = {
+          title: j.title,
+          description: j.description,
+          property_address: j.property_address,
+          resident_name: j.resident_name,
+        };
       }
     }
 
@@ -249,15 +264,20 @@ const getPublicBookingAvailableSlots = async (req, res, next) => {
       });
     }
 
-    if (!staffProfileId) {
-      return res.status(400).json({
-        success: false,
-        message: 'No technician is currently assigned to this work order. Please contact Office Admin.',
-      });
+    // 2. Calculate Available Slots for the Assigned/Eligible Technician(s)
+    let availabilityResult;
+    if (staffProfileId) {
+      const singleRes = await calculateStaffAvailableSlots(staffProfileId, date, durationHours);
+      if (singleRes.availableSlots && singleRes.availableSlots.length > 0) {
+        availabilityResult = singleRes;
+      } else {
+        // Fallback to multi-staff calculation if assigned staff is off or busy on this date
+        availabilityResult = await calculateMultiStaffAvailableSlots(date, durationHours, staffProfileId, jobDetails);
+      }
+    } else {
+      // Dynamic multi-staff calculation across all active technicians
+      availabilityResult = await calculateMultiStaffAvailableSlots(date, durationHours, null, jobDetails);
     }
-
-    // 2. Calculate Available Slots for the Assigned/Eligible Technician
-    const availabilityResult = await calculateStaffAvailableSlots(staffProfileId, date, durationHours);
 
     res.status(200).json({
       success: true,

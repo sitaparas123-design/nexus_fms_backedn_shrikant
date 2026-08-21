@@ -268,7 +268,7 @@ const submitPublicQuoteUpload = async (req, res, next) => {
   }
 };
 
-const { calculateStaffAvailableSlots } = require('../services/availability.service');
+const { calculateStaffAvailableSlots, calculateMultiStaffAvailableSlots } = require('../services/availability.service');
 
 // @desc    Submit Resident Slot Booking Confirmation (NO LOGIN REQUIRED)
 // @route   POST /api/v1/public/booking/:token/confirm
@@ -294,7 +294,7 @@ const submitPublicBooking = async (req, res, next) => {
 
     // Verify token & lock work order row
     const [bookingRows] = await connection.query(
-      `SELECT b.id as request_id, b.work_order_id, w.assigned_staff_id, w.duration_hours 
+      `SELECT b.id as request_id, b.work_order_id, b.assignment_preference_staff_id, w.assigned_staff_id, w.duration_hours, w.title, w.description, w.property_address 
        FROM booking_requests b
        JOIN work_orders w ON b.work_order_id = w.id
        WHERE b.secure_token = ? FOR UPDATE`,
@@ -305,21 +305,34 @@ const submitPublicBooking = async (req, res, next) => {
     let requestId = null;
     let assignedStaffId = null;
     let durationHours = 1.5;
+    let jobDetails = {};
 
     if (bookingRows.length > 0) {
-      workOrderId = bookingRows[0].work_order_id;
-      requestId = bookingRows[0].request_id;
-      assignedStaffId = bookingRows[0].assigned_staff_id;
-      durationHours = parseFloat(bookingRows[0].duration_hours || 1.5);
+      const b = bookingRows[0];
+      workOrderId = b.work_order_id;
+      requestId = b.request_id;
+      assignedStaffId = b.assigned_staff_id || b.assignment_preference_staff_id;
+      durationHours = parseFloat(b.duration_hours || 1.5);
+      jobDetails = {
+        title: b.title,
+        description: b.description,
+        property_address: b.property_address,
+      };
     } else {
       const [jobRows] = await connection.query(
-        'SELECT id, assigned_staff_id, duration_hours FROM work_orders WHERE secure_token = ? FOR UPDATE',
+        'SELECT id, assigned_staff_id, duration_hours, title, description, property_address FROM work_orders WHERE secure_token = ? FOR UPDATE',
         [token]
       );
       if (jobRows.length > 0) {
-        workOrderId = jobRows[0].id;
-        assignedStaffId = jobRows[0].assigned_staff_id;
-        durationHours = parseFloat(jobRows[0].duration_hours || 1.5);
+        const j = jobRows[0];
+        workOrderId = j.id;
+        assignedStaffId = j.assigned_staff_id;
+        durationHours = parseFloat(j.duration_hours || 1.5);
+        jobDetails = {
+          title: j.title,
+          description: j.description,
+          property_address: j.property_address,
+        };
       }
     }
 
@@ -330,6 +343,17 @@ const submitPublicBooking = async (req, res, next) => {
         success: false,
         message: 'Invalid or expired booking token.',
       });
+    }
+
+    // Auto-assign best available technician for this slot if not pre-assigned
+    if (!assignedStaffId) {
+      const multiAvail = await calculateMultiStaffAvailableSlots(dateVal, durationHours, null, jobDetails, connection);
+      const matchingSlot = multiAvail.availableSlots.find(s => s.timeSlot === slotVal || s.startTime === slotVal);
+      if (matchingSlot && matchingSlot.assignedStaffId) {
+        assignedStaffId = matchingSlot.assignedStaffId;
+      } else if (multiAvail.recommendedStaff) {
+        assignedStaffId = multiAvail.recommendedStaff.id;
+      }
     }
 
     // Validate Slot Availability & Overlapping Booking Prevention
@@ -354,14 +378,17 @@ const submitPublicBooking = async (req, res, next) => {
       );
     }
 
-    // Update work_orders scheduled date/time and move stage to 'Jobs'
+    // Update work_orders scheduled date/time, assigned staff, and move stage to 'Jobs'
+    const assignedJson = assignedStaffId ? JSON.stringify([assignedStaffId]) : null;
     await connection.query(
       `UPDATE work_orders SET 
         scheduled_date = ?,
         scheduled_time_slot = ?,
+        assigned_staff_id = COALESCE(?, assigned_staff_id),
+        assigned_staff_ids = COALESCE(?, assigned_staff_ids),
         pipeline_stage = 'Jobs'
        WHERE id = ?`,
-      [dateVal, slotVal, workOrderId]
+      [dateVal, slotVal, assignedStaffId, assignedJson, workOrderId]
     );
 
     const [woRows] = await connection.query(
