@@ -212,6 +212,25 @@ const submitPublicQuoteUpload = async (req, res, next) => {
       [noteText, noteText, workOrderId]
     );
 
+    // Automatically generate booking request if not exists
+    const [existingBooking] = await connection.query(
+      'SELECT id FROM booking_requests WHERE work_order_id = ?',
+      [workOrderId]
+    );
+
+    if (existingBooking.length === 0) {
+      const bookingToken = `tok_${crypto.randomBytes(16).toString('hex')}`;
+      const expiresAt = new Date();
+      expiresAt.setDate(expiresAt.getDate() + 7); // Default 7 days expiry
+
+      await connection.query(
+        `INSERT INTO booking_requests (
+          work_order_id, secure_token, earliest_date, status, expires_at
+        ) VALUES (?, ?, CURDATE(), 'PENDING', ?)`,
+        [workOrderId, bookingToken, expiresAt]
+      );
+    }
+
     const [admins] = await connection.query("SELECT id FROM users WHERE role = 'OFFICE_ADMIN'");
     const [woRows] = await connection.query("SELECT title, resident_name, property_address FROM work_orders WHERE id = ?", [workOrderId]);
     const jobTitle = woRows[0]?.title || 'Repair Job';

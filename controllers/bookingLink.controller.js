@@ -176,6 +176,119 @@ const generateBookingLink = async (req, res, next) => {
   }
 };
 
+const updateBookingRequest = async (req, res, next) => {
+  const connection = await pool.getConnection();
+  try {
+    const { id } = req.params;
+    const {
+      description,
+      durationHours,
+      assignmentPreference,
+      earliestDate,
+      internalNotes,
+      linkExpiryDays,
+      priority
+    } = req.body;
+
+    // 1. Fetch existing booking request to get work_order_id
+    const [bookingRows] = await connection.query(
+      'SELECT work_order_id, expires_at FROM booking_requests WHERE id = ?',
+      [id]
+    );
+
+    if (bookingRows.length === 0) {
+      connection.release();
+      return res.status(404).json({
+        success: false,
+        message: `Booking request not found with ID ${id}`
+      });
+    }
+
+    const { work_order_id, expires_at } = bookingRows[0];
+
+    // 2. Parse assignment preference staff ID
+    let staffPrefId = null;
+    if (assignmentPreference && assignmentPreference !== 'ANY') {
+      staffPrefId = parseInt(String(assignmentPreference).replace('stf-', ''), 10);
+      if (isNaN(staffPrefId)) staffPrefId = null;
+    }
+
+    // 3. Calculate new expires_at if linkExpiryDays is provided
+    let newExpiresAt = expires_at;
+    if (linkExpiryDays) {
+      const expiryDays = parseInt(linkExpiryDays, 10);
+      if (!isNaN(expiryDays)) {
+        newExpiresAt = new Date();
+        newExpiresAt.setDate(newExpiresAt.getDate() + expiryDays);
+      }
+    }
+
+    await connection.beginTransaction();
+
+    // 4. Update booking_requests
+    await connection.query(
+      `UPDATE booking_requests SET 
+        assignment_preference_staff_id = ?,
+        earliest_date = ?,
+        internal_notes = ?,
+        expires_at = ?
+       WHERE id = ?`,
+      [
+        staffPrefId,
+        earliestDate || null,
+        internalNotes || '',
+        newExpiresAt,
+        id
+      ]
+    );
+
+    // 5. Update work_orders
+    const updateJobFields = [];
+    const updateJobParams = [];
+
+    if (description !== undefined) {
+      updateJobFields.push('description = ?');
+      updateJobParams.push(description);
+      
+      // Also update the job title/work order details if needed
+      updateJobFields.push('title = ?');
+      updateJobParams.push(description);
+    }
+    if (durationHours !== undefined) {
+      updateJobFields.push('duration_hours = ?');
+      updateJobParams.push(parseFloat(durationHours || 1.5));
+    }
+    if (priority !== undefined) {
+      updateJobFields.push('priority = ?');
+      updateJobParams.push(priority);
+    }
+    
+    // Always sync assigned_staff_id with preferred staff ID
+    updateJobFields.push('assigned_staff_id = ?');
+    updateJobParams.push(staffPrefId);
+
+    if (updateJobFields.length > 0) {
+      updateJobParams.push(work_order_id);
+      await connection.query(
+        `UPDATE work_orders SET ${updateJobFields.join(', ')} WHERE id = ?`,
+        updateJobParams
+      );
+    }
+
+    await connection.commit();
+    connection.release();
+
+    res.status(200).json({
+      success: true,
+      message: 'Booking request updated successfully.'
+    });
+  } catch (err) {
+    await connection.rollback();
+    connection.release();
+    next(err);
+  }
+};
+
 const deleteBookingRequest = async (req, res, next) => {
   try {
     const { id } = req.params;
@@ -192,5 +305,6 @@ const deleteBookingRequest = async (req, res, next) => {
 module.exports = {
   getBookingRequests,
   generateBookingLink,
+  updateBookingRequest,
   deleteBookingRequest
 };
