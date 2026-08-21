@@ -337,9 +337,9 @@ const calculateMultiStaffAvailableSlots = async (
     }
   }
 
-  // 5. Build unique slots across all working technicians
-  // We compute candidate slots for each technician in order of their rank
-  const slotMap = new Map(); // key: "HH:mm - HH:mm" -> Slot Object
+  // 5. Build candidate slots for each working technician
+  const bestTechnician = availableStaffOnDay[0];
+  const candidateSlots = [];
 
   for (const tech of availableStaffOnDay) {
     const shiftStartMin = timeToMinutes(tech.work_start_time || '08:00:00');
@@ -370,60 +370,42 @@ const calculateMultiStaffAvailableSlots = async (
       const endTimeStr = minutesToTime(slotEndMin);
       const slotKey = `${startTimeStr} - ${endTimeStr}`;
 
-      if (!slotMap.has(slotKey)) {
-        slotMap.set(slotKey, {
-          timeSlot: slotKey,
-          startTime: startTimeStr,
-          endTime: endTimeStr,
-          durationHours: durationHours,
-          availableStaffCount: 1,
-          assignedStaffId: tech.id,
-          assignedStaffName: tech.staff_name,
-          assignedStaffEmail: tech.staff_email,
-          assignedStaffRole: tech.role_title || 'Maintenance Specialist',
-          assignedStaffCategory: aiInfo.category || tech.role_title || 'General Maintenance',
-          assignedStaffColor: tech.color_hex || '#009bf2',
-          eligibleStaff: [{
-            id: tech.id,
-            name: tech.staff_name,
-            email: tech.staff_email,
-            role: tech.role_title,
-          }],
-          eligibleStaffIds: [tech.id],
-        });
-      } else {
-        const existing = slotMap.get(slotKey);
-        existing.availableStaffCount += 1;
-        if (!existing.eligibleStaffIds.includes(tech.id)) {
-          existing.eligibleStaffIds.push(tech.id);
-          existing.eligibleStaff.push({
-            id: tech.id,
-            name: tech.staff_name,
-            email: tech.staff_email,
-            role: tech.role_title,
-          });
-        }
-      }
+      candidateSlots.push({
+        slotId: `${startTimeStr}-${endTimeStr}-${tech.id}`,
+        timeSlot: slotKey,
+        startTime: startTimeStr,
+        endTime: endTimeStr,
+        durationHours: durationHours,
+        assignedStaffId: tech.id,
+        assignedStaffName: tech.staff_name,
+        assignedStaffEmail: tech.staff_email,
+        assignedStaffRole: tech.role_title || 'Maintenance Specialist',
+        assignedStaffCategory: aiInfo.category || tech.role_title || 'General Maintenance',
+        assignedStaffColor: tech.color_hex || '#009bf2',
+        isRecommended: bestTechnician ? (tech.id === bestTechnician.id) : false,
+      });
     }
   }
 
-  // Convert map to sorted array
-  const allSlots = Array.from(slotMap.values());
-  allSlots.sort((a, b) => timeToMinutes(a.startTime) - timeToMinutes(b.startTime));
-
-  const bestTechnician = availableStaffOnDay[0];
+  // Sort slots by start time, then recommended first
+  candidateSlots.sort((a, b) => {
+    const diff = timeToMinutes(a.startTime) - timeToMinutes(b.startTime);
+    if (diff !== 0) return diff;
+    return (b.isRecommended ? 1 : 0) - (a.isRecommended ? 1 : 0);
+  });
 
   return {
     success: true,
     targetDate,
     dayAbbrev,
     durationHours,
-    availableSlots: allSlots,
-    totalSlotsFound: allSlots.length,
+    availableSlots: candidateSlots,
+    totalSlotsFound: candidateSlots.length,
     aiCategory: aiInfo.category,
     recommendedStaff: bestTechnician ? {
       id: bestTechnician.id,
       name: bestTechnician.staff_name,
+      email: bestTechnician.staff_email,
       role: bestTechnician.role_title,
       color: bestTechnician.color_hex || '#009bf2',
       matchScore: bestTechnician.totalScore,
@@ -431,6 +413,7 @@ const calculateMultiStaffAvailableSlots = async (
     rankedStaff: rankedStaff.map(s => ({
       id: s.id,
       name: s.staff_name,
+      email: s.staff_email,
       role: s.role_title,
       color: s.color_hex || '#009bf2',
       worksOnDay: s.worksOnDay,
