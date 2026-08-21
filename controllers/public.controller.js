@@ -20,14 +20,20 @@ const getPublicRequestByToken = async (req, res, next) => {
         [token]
       ),
       pool.query(
-        `SELECT b.*, w.job_number, w.title, w.resident_name, w.property_address, w.description as job_desc, w.duration_hours
+        `SELECT b.*, w.job_number, w.title, w.resident_name, w.property_address, w.description as job_desc, w.duration_hours, w.scheduled_date, w.scheduled_time_slot, w.assigned_staff_id, u.full_name as staff_name
          FROM booking_requests b
          JOIN work_orders w ON b.work_order_id = w.id
+         LEFT JOIN staff_profiles sp ON w.assigned_staff_id = sp.id
+         LEFT JOIN users u ON sp.user_id = u.id
          WHERE b.secure_token = ?`,
         [token]
       ),
       pool.query(
-        `SELECT w.* FROM work_orders w WHERE w.secure_token = ?`,
+        `SELECT w.*, u.full_name as staff_name 
+         FROM work_orders w 
+         LEFT JOIN staff_profiles sp ON w.assigned_staff_id = sp.id
+         LEFT JOIN users u ON sp.user_id = u.id
+         WHERE w.secure_token = ?`,
         [token]
       )
     ]);
@@ -43,6 +49,7 @@ const getPublicRequestByToken = async (req, res, next) => {
           jobNumber: q.job_number,
           title: q.title,
           residentName: q.resident_name,
+          tenantName: q.resident_name,
           address: q.property_address,
           description: q.job_desc,
           status: q.status,
@@ -54,6 +61,14 @@ const getPublicRequestByToken = async (req, res, next) => {
 
     if (bookingRows.length > 0) {
       const b = bookingRows[0];
+      const rawDate = b.booked_date || b.scheduled_date;
+      let finalDate = null;
+      if (rawDate) {
+        finalDate = typeof rawDate === 'string' ? rawDate.split('T')[0] : new Date(rawDate).toISOString().split('T')[0];
+      }
+      const finalSlot = b.booked_time_slot || b.scheduled_time_slot || null;
+      const finalStaff = b.staff_name || 'Assigned Technician';
+
       return res.status(200).json({
         success: true,
         type: 'BOOKING',
@@ -63,12 +78,18 @@ const getPublicRequestByToken = async (req, res, next) => {
           jobNumber: b.job_number,
           title: b.title,
           residentName: b.resident_name,
+          tenantName: b.resident_name,
           address: b.property_address,
-          description: b.job_desc,
+          description: b.job_desc || b.title,
           durationHours: parseFloat(b.duration_hours || 1.5),
-          selectedDate: b.booked_date,
-          selectedTimeSlot: b.booked_time_slot,
+          selectedDate: finalDate,
+          selectedTimeSlot: finalSlot,
           status: b.status,
+          bookingDetails: {
+            date: finalDate,
+            timeSlot: finalSlot,
+            staffName: finalStaff,
+          },
           expiresAt: b.expires_at,
           secureToken: b.secure_token,
         },
@@ -77,6 +98,11 @@ const getPublicRequestByToken = async (req, res, next) => {
 
     if (jobRows.length > 0) {
       const j = jobRows[0];
+      const rawDate = j.scheduled_date;
+      let finalDate = null;
+      if (rawDate) {
+        finalDate = typeof rawDate === 'string' ? rawDate.split('T')[0] : new Date(rawDate).toISOString().split('T')[0];
+      }
       return res.status(200).json({
         success: true,
         type: 'GENERIC_PORTAL',
@@ -85,11 +111,17 @@ const getPublicRequestByToken = async (req, res, next) => {
           jobNumber: j.job_number,
           title: j.title,
           residentName: j.resident_name,
+          tenantName: j.resident_name,
           address: j.property_address,
           description: j.description,
           durationHours: parseFloat(j.duration_hours || 1.5),
-          scheduledDate: j.scheduled_date,
+          scheduledDate: finalDate,
           scheduledTimeSlot: j.scheduled_time_slot,
+          bookingDetails: {
+            date: finalDate,
+            timeSlot: j.scheduled_time_slot,
+            staffName: j.staff_name || 'Assigned Technician',
+          },
           status: j.pipeline_stage,
           secureToken: j.secure_token,
         },

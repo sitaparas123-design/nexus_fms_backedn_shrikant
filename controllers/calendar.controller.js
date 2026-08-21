@@ -150,7 +150,7 @@ const getCalendar = async (req, res, next) => {
           u.email
         FROM users u
         LEFT JOIN staff_profiles sp ON u.id = sp.user_id
-        WHERE u.role = 'MAINTENANCE_STAFF' OR sp.id IS NOT NULL
+        WHERE u.role = 'MAINTENANCE_STAFF'
         ORDER BY sp.created_at ASC
       `),
       pool.query(sql, queryParams)

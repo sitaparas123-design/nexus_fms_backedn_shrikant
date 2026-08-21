@@ -217,7 +217,7 @@ const calculateMultiStaffAvailableSlots = async (
       sp.duty_status, u.full_name as staff_name, u.email as staff_email, u.phone as staff_phone
      FROM staff_profiles sp
      JOIN users u ON sp.user_id = u.id
-     WHERE u.role = 'MAINTENANCE_STAFF' OR sp.id IS NOT NULL
+     WHERE u.role = 'MAINTENANCE_STAFF'
      ORDER BY sp.id ASC`
   );
 
