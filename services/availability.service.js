@@ -36,8 +36,8 @@ const calculateStaffAvailableSlots = async (staffProfileId, targetDate, duration
   // 1. Fetch Staff Profile Working Hours & Days
   const [staffRows] = await connection.query(
     `SELECT 
-      sp.id, sp.user_id, sp.working_days_json, sp.work_start_time, sp.work_end_time,
-      sp.break_start_time, sp.break_end_time, u.full_name as staff_name
+      sp.id, sp.user_id, sp.role_title, sp.working_days_json, sp.work_start_time, sp.work_end_time,
+      sp.break_start_time, sp.break_end_time, u.full_name as staff_name, u.email as staff_email
      FROM staff_profiles sp
      JOIN users u ON sp.user_id = u.id
      WHERE sp.id = ?`,
@@ -131,6 +131,11 @@ const calculateStaffAvailableSlots = async (staffProfileId, targetDate, duration
       startTime: startTimeStr,
       endTime: endTimeStr,
       durationHours: durationHours,
+      assignedStaffId: staffProfileId,
+      assignedStaffName: staff.staff_name,
+      assignedStaffEmail: staff.staff_email,
+      assignedStaffRole: staff.role_title || 'Maintenance Specialist',
+      assignedStaffCategory: staff.role_title || 'Maintenance Specialist',
     });
   }
 
@@ -138,6 +143,8 @@ const calculateStaffAvailableSlots = async (staffProfileId, targetDate, duration
     success: true,
     staffId: staffProfileId,
     staffName: staff.staff_name,
+    staffEmail: staff.staff_email,
+    staffRole: staff.role_title || 'Maintenance Specialist',
     targetDate,
     dayAbbrev,
     durationHours,
@@ -372,8 +379,16 @@ const calculateMultiStaffAvailableSlots = async (
           availableStaffCount: 1,
           assignedStaffId: tech.id,
           assignedStaffName: tech.staff_name,
-          assignedStaffRole: tech.role_title,
+          assignedStaffEmail: tech.staff_email,
+          assignedStaffRole: tech.role_title || 'Maintenance Specialist',
+          assignedStaffCategory: aiInfo.category || tech.role_title || 'General Maintenance',
           assignedStaffColor: tech.color_hex || '#009bf2',
+          eligibleStaff: [{
+            id: tech.id,
+            name: tech.staff_name,
+            email: tech.staff_email,
+            role: tech.role_title,
+          }],
           eligibleStaffIds: [tech.id],
         });
       } else {
@@ -381,6 +396,12 @@ const calculateMultiStaffAvailableSlots = async (
         existing.availableStaffCount += 1;
         if (!existing.eligibleStaffIds.includes(tech.id)) {
           existing.eligibleStaffIds.push(tech.id);
+          existing.eligibleStaff.push({
+            id: tech.id,
+            name: tech.staff_name,
+            email: tech.staff_email,
+            role: tech.role_title,
+          });
         }
       }
     }
