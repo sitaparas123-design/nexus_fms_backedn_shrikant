@@ -226,7 +226,7 @@ const submitPublicQuoteUpload = async (req, res, next) => {
       await connection.query(
         `INSERT INTO booking_requests (
           work_order_id, secure_token, earliest_date, status, expires_at
-        ) VALUES (?, ?, CURDATE(), 'PENDING', ?)`,
+        ) VALUES (?, ?, CURDATE(), 'WAITING_FOR_BOOKING', ?)`,
         [workOrderId, bookingToken, expiresAt]
       );
     }
@@ -485,7 +485,7 @@ const generatePublicRequestLink = async (req, res, next) => {
         `INSERT INTO booking_requests (work_order_id, secure_token, status, expires_at) 
          VALUES (?, ?, ?, ?)
          ON DUPLICATE KEY UPDATE secure_token = ?, status = ?, expires_at = ?`,
-        [id, secureToken, 'PENDING', expiresAt, secureToken, 'PENDING', expiresAt]
+        [id, secureToken, 'WAITING_FOR_BOOKING', expiresAt, secureToken, 'WAITING_FOR_BOOKING', expiresAt]
       );
     }
 
