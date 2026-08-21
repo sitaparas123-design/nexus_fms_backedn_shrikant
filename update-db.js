@@ -27,7 +27,8 @@ async function updateLiveDB() {
       "ALTER TABLE staff_profiles ADD COLUMN kpi_score INT NOT NULL DEFAULT 0;",
       "ALTER TABLE staff_profiles ADD COLUMN jobs_completed INT NOT NULL DEFAULT 0;",
       "ALTER TABLE staff_profiles ADD COLUMN revisits INT NOT NULL DEFAULT 0;",
-      "ALTER TABLE staff_profiles ADD COLUMN duty_status VARCHAR(50) NOT NULL DEFAULT 'AVAILABLE';"
+      "ALTER TABLE staff_profiles ADD COLUMN duty_status VARCHAR(50) NOT NULL DEFAULT 'AVAILABLE';",
+      "ALTER TABLE residents ADD COLUMN avatar_url VARCHAR(255) DEFAULT NULL;"
     ];
 
     for (const q of queries) {

@@ -57,14 +57,14 @@ async function runPhase7Tests() {
     if (!uploadRes.data.success) throw new Error("Public upload failed!");
     console.log("✅ Public upload succeeded");
 
-    // 5. Verify State Changes (COMPLETED and READY_TO_QUOTE)
+    // 5. Verify State Changes (COMPLETED and Completed Quotes)
     const [checkQr] = await pool.query('SELECT status FROM quote_requests WHERE work_order_id = ?', [testJobId]);
     if (checkQr[0].status !== 'COMPLETED') throw new Error(`QR status is ${checkQr[0].status}, expected COMPLETED`);
     console.log("✅ quote_requests status updated to COMPLETED");
 
     const [checkJob] = await pool.query('SELECT pipeline_stage FROM work_orders WHERE id = ?', [testJobId]);
-    if (checkJob[0].pipeline_stage !== 'READY_TO_QUOTE') throw new Error(`Job stage is ${checkJob[0].pipeline_stage}, expected READY_TO_QUOTE`);
-    console.log("✅ work_orders stage updated to READY_TO_QUOTE");
+    if (checkJob[0].pipeline_stage !== 'Completed Quotes') throw new Error(`Job stage is ${checkJob[0].pipeline_stage}, expected Completed Quotes`);
+    console.log("✅ work_orders stage updated to Completed Quotes");
 
     // 6. Test Scheduler Limits
     console.log("Testing scheduler with mocked dates...");

@@ -19,8 +19,8 @@ router.get('/', getTenants);
 router.get('/:id', getTenantById);
 
 // Write / Management Endpoints (Strictly Office Admin Only)
-router.post('/', authorizeRoles('OFFICE_ADMIN'), photoUpload.single('document'), createTenant);
-router.put('/:id', authorizeRoles('OFFICE_ADMIN'), photoUpload.single('document'), updateTenant);
+router.post('/', authorizeRoles('OFFICE_ADMIN'), photoUpload.fields([{ name: 'avatar', maxCount: 1 }, { name: 'document', maxCount: 1 }]), createTenant);
+router.put('/:id', authorizeRoles('OFFICE_ADMIN'), photoUpload.fields([{ name: 'avatar', maxCount: 1 }, { name: 'document', maxCount: 1 }]), updateTenant);
 router.delete('/:id', authorizeRoles('OFFICE_ADMIN'), deleteTenant);
 
 module.exports = router;

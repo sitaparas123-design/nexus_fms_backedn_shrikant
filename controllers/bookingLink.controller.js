@@ -176,7 +176,21 @@ const generateBookingLink = async (req, res, next) => {
   }
 };
 
+const deleteBookingRequest = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const [result] = await pool.query('DELETE FROM booking_requests WHERE id = ?', [id]);
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ success: false, message: 'Booking request not found' });
+    }
+    res.status(200).json({ success: true, message: 'Booking request deleted successfully' });
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   getBookingRequests,
-  generateBookingLink
+  generateBookingLink,
+  deleteBookingRequest
 };

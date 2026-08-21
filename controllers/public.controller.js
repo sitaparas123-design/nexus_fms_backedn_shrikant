@@ -200,10 +200,10 @@ const submitPublicQuoteUpload = async (req, res, next) => {
       );
     }
 
-    // Update work order description and transition to READY_TO_QUOTE
+    // Update work order description and transition to Completed Quotes
     await connection.query(
       `UPDATE work_orders SET 
-        pipeline_stage = 'READY_TO_QUOTE',
+        pipeline_stage = 'Completed Quotes',
         description = CASE 
           WHEN description IS NULL OR description = '' THEN ? 
           ELSE CONCAT(description, '\n\n[Resident Upload Notes]: ', ?) 
@@ -223,7 +223,7 @@ const submitPublicQuoteUpload = async (req, res, next) => {
         recipientUserId: admin.id,
         type: 'QUOTE_PHOTOS_SUBMITTED',
         title: 'Quote photos/details received',
-        message: `Photos uploaded for ${jobTitle} by ${resName} at ${resAddress}. Work Order is ready to quote.`,
+        message: `Photos uploaded for ${jobTitle} by ${resName} at ${resAddress}. Work Order moved to Completed Quotes.`,
         relatedEntityType: 'work_orders',
         relatedEntityId: workOrderId,
         actionUrl: `/admin/quote-requests`
