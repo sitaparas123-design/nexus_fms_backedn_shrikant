@@ -1,5 +1,5 @@
 const { pool } = require('../config/db');
-const { calculateStaffAvailableSlots, calculateAvailableSlotsForJob, timeToMinutes } = require('../services/availability.service');
+const { calculateStaffAvailableSlots, timeToMinutes } = require('../services/availability.service');
 const notificationService = require('../services/notification.service');
 
 // Helper to resolve staff profile ID from logged in user ID
@@ -213,54 +213,56 @@ const getPublicBookingAvailableSlots = async (req, res, next) => {
       });
     }
 
-    // 1. Resolve Work Order from Token
+    // 1. Resolve Work Order & Assigned Technician from Token
     const [bookingRows] = await pool.query(
-      `SELECT b.id as request_id, b.work_order_id, b.assignment_preference_staff_id,
-              w.id as wo_id, w.assigned_staff_id, w.duration_hours, w.title, w.description,
-              w.resident_name, w.property_address, w.category
+      `SELECT b.id as request_id, b.work_order_id, w.assigned_staff_id, w.duration_hours, w.title, w.resident_name
        FROM booking_requests b
        JOIN work_orders w ON b.work_order_id = w.id
        WHERE b.secure_token = ?`,
       [token]
     );
 
-    let workOrder = null;
+    let workOrderId = null;
+    let staffProfileId = null;
+    let durationHours = 1.5;
 
     if (bookingRows.length > 0) {
-      workOrder = {
-        ...bookingRows[0],
-        assigned_staff_id: bookingRows[0].assigned_staff_id || bookingRows[0].assignment_preference_staff_id || null,
-      };
+      workOrderId = bookingRows[0].work_order_id;
+      staffProfileId = bookingRows[0].assigned_staff_id;
+      durationHours = parseFloat(bookingRows[0].duration_hours || 1.5);
     } else {
       const [jobRows] = await pool.query(
-        `SELECT id as wo_id, id, assigned_staff_id, duration_hours, title, description,
-                resident_name, property_address, category
-         FROM work_orders WHERE secure_token = ?`,
+        'SELECT id, assigned_staff_id, duration_hours FROM work_orders WHERE secure_token = ?',
         [token]
       );
       if (jobRows.length > 0) {
-        workOrder = jobRows[0];
+        workOrderId = jobRows[0].id;
+        staffProfileId = jobRows[0].assigned_staff_id;
+        durationHours = parseFloat(jobRows[0].duration_hours || 1.5);
       }
     }
 
-    if (!workOrder) {
+    if (!workOrderId) {
       return res.status(404).json({
         success: false,
         message: 'Invalid or expired secure booking token.',
       });
     }
 
-    // 2. Smart Multi-Staff / AI Skill & Distance Slot Calculation
-    const availabilityResult = await calculateAvailableSlotsForJob(workOrder, date);
+    if (!staffProfileId) {
+      return res.status(400).json({
+        success: false,
+        message: 'No technician is currently assigned to this work order. Please contact Office Admin.',
+      });
+    }
+
+    // 2. Calculate Available Slots for the Assigned/Eligible Technician
+    const availabilityResult = await calculateStaffAvailableSlots(staffProfileId, date, durationHours);
 
     res.status(200).json({
       success: true,
-      workOrderId: workOrder.wo_id || workOrder.id,
-      durationHours: availabilityResult.durationHours,
-      category: availabilityResult.category,
-      staffName: availabilityResult.staffName,
-      availableSlots: availabilityResult.availableSlots,
-      reason: availabilityResult.reason,
+      workOrderId,
+      durationHours,
       availability: availabilityResult,
     });
   } catch (err) {

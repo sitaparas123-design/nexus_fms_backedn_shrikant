@@ -268,7 +268,7 @@ const submitPublicQuoteUpload = async (req, res, next) => {
   }
 };
 
-const { calculateStaffAvailableSlots, calculateAvailableSlotsForJob } = require('../services/availability.service');
+const { calculateStaffAvailableSlots } = require('../services/availability.service');
 
 // @desc    Submit Resident Slot Booking Confirmation (NO LOGIN REQUIRED)
 // @route   POST /api/v1/public/booking/:token/confirm
@@ -277,7 +277,7 @@ const submitPublicBooking = async (req, res, next) => {
   const connection = await pool.getConnection();
   try {
     const { token } = req.params;
-    const { booking_date, selectedDate, time_slot, selectedTimeSlot, staffId } = req.body;
+    const { booking_date, selectedDate, time_slot, selectedTimeSlot } = req.body;
 
     const dateVal = (booking_date || selectedDate || '').trim();
     const slotVal = (time_slot || selectedTimeSlot || '').trim();
@@ -294,8 +294,7 @@ const submitPublicBooking = async (req, res, next) => {
 
     // Verify token & lock work order row
     const [bookingRows] = await connection.query(
-      `SELECT b.id as request_id, b.work_order_id, b.assignment_preference_staff_id,
-              w.assigned_staff_id, w.duration_hours, w.title, w.description, w.property_address, w.category
+      `SELECT b.id as request_id, b.work_order_id, w.assigned_staff_id, w.duration_hours 
        FROM booking_requests b
        JOIN work_orders w ON b.work_order_id = w.id
        WHERE b.secure_token = ? FOR UPDATE`,
@@ -306,24 +305,21 @@ const submitPublicBooking = async (req, res, next) => {
     let requestId = null;
     let assignedStaffId = null;
     let durationHours = 1.5;
-    let workOrderObj = null;
 
     if (bookingRows.length > 0) {
       workOrderId = bookingRows[0].work_order_id;
       requestId = bookingRows[0].request_id;
-      assignedStaffId = staffId || bookingRows[0].assigned_staff_id || bookingRows[0].assignment_preference_staff_id || null;
+      assignedStaffId = bookingRows[0].assigned_staff_id;
       durationHours = parseFloat(bookingRows[0].duration_hours || 1.5);
-      workOrderObj = bookingRows[0];
     } else {
       const [jobRows] = await connection.query(
-        'SELECT id, assigned_staff_id, duration_hours, title, description, property_address, category FROM work_orders WHERE secure_token = ? FOR UPDATE',
+        'SELECT id, assigned_staff_id, duration_hours FROM work_orders WHERE secure_token = ? FOR UPDATE',
         [token]
       );
       if (jobRows.length > 0) {
         workOrderId = jobRows[0].id;
-        assignedStaffId = staffId || jobRows[0].assigned_staff_id;
+        assignedStaffId = jobRows[0].assigned_staff_id;
         durationHours = parseFloat(jobRows[0].duration_hours || 1.5);
-        workOrderObj = jobRows[0];
       }
     }
 
@@ -336,9 +332,7 @@ const submitPublicBooking = async (req, res, next) => {
       });
     }
 
-    let targetStaffId = assignedStaffId;
-
-    // Validate Slot Availability & Resolve Assigned Technician
+    // Validate Slot Availability & Overlapping Booking Prevention
     if (assignedStaffId) {
       const availabilityResult = await calculateStaffAvailableSlots(assignedStaffId, dateVal, durationHours, connection);
       const isSlotValid = availabilityResult.availableSlots.some(s => s.timeSlot === slotVal || s.startTime === slotVal);
@@ -351,21 +345,6 @@ const submitPublicBooking = async (req, res, next) => {
           message: `Booking Rejected: Slot '${slotVal}' on ${dateVal} is no longer available (Outside shift, during break, or already booked).`,
         });
       }
-    } else {
-      // Calculate across all eligible technicians and resolve the assigned staff for this specific slot
-      const availabilityResult = await calculateAvailableSlotsForJob(workOrderObj, dateVal, connection);
-      const matchingSlot = availabilityResult.availableSlots.find(s => s.timeSlot === slotVal || s.startTime === slotVal);
-
-      if (!matchingSlot) {
-        await connection.rollback();
-        connection.release();
-        return res.status(400).json({
-          success: false,
-          message: `Booking Rejected: Slot '${slotVal}' on ${dateVal} is not available. Please select another slot.`,
-        });
-      }
-
-      targetStaffId = matchingSlot.staffId;
     }
 
     if (requestId) {
@@ -375,15 +354,14 @@ const submitPublicBooking = async (req, res, next) => {
       );
     }
 
-    // Update work_orders assigned staff, scheduled date/time and move stage to 'Jobs'
+    // Update work_orders scheduled date/time and move stage to 'Jobs'
     await connection.query(
       `UPDATE work_orders SET 
-        assigned_staff_id = COALESCE(?, assigned_staff_id),
         scheduled_date = ?,
         scheduled_time_slot = ?,
         pipeline_stage = 'Jobs'
        WHERE id = ?`,
-      [targetStaffId, dateVal, slotVal, workOrderId]
+      [dateVal, slotVal, workOrderId]
     );
 
     const [woRows] = await connection.query(
