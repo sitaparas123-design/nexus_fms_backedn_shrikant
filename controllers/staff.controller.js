@@ -88,7 +88,9 @@ const getStaff = async (req, res, next) => {
         revisits: r.revisits || 0,
         revisitRate: computedRevisitRate,
         homeAddress: r.home_address || '',
+        home_address: r.home_address || '',
         homePostcode: r.home_postcode || '',
+        home_postcode: r.home_postcode || '',
         dutyStatus: r.duty_status || 'AVAILABLE',
       };
     });
@@ -158,8 +160,10 @@ const getStaffById = async (req, res, next) => {
       jobsCompleted: r.jobs_completed || 0,
       revisits: r.revisits || 0,
       homeAddress: r.home_address || '',
+      home_address: r.home_address || '',
       homePostcode: r.home_postcode || '',
-      dutyStatus: r.duty_status || 'AVAILABLE',
+      home_postcode: r.home_postcode || '',
+      dutyStatus: r.dutyStatus || r.duty_status || 'AVAILABLE',
     };
 
     res.status(200).json({
@@ -423,6 +427,12 @@ const deleteStaff = async (req, res, next) => {
       message: `Staff member ID ${id} deleted successfully.`,
     });
   } catch (err) {
+    if (err.errno === 1451 || err.code === 'ER_ROW_IS_REFERENCED_2') {
+      return res.status(400).json({
+        success: false,
+        message: 'Cannot delete this staff member because they are associated with existing job material costs or work orders. Please reassign or delete their associated records first.',
+      });
+    }
     next(err);
   }
 };
